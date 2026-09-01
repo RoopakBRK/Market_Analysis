@@ -1,0 +1,128 @@
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# -----------------------------
+# Virtual Environment
+# -----------------------------
+venv/
+.venv/
+env/
+ENV/
+
+# -----------------------------
+# Environment Variables
+# -----------------------------
+.env
+.env.*
+!.env.example
+
+# -----------------------------
+# IDEs
+# -----------------------------
+.vscode/
+.idea/
+*.iml
+
+# -----------------------------
+# Jupyter
+# -----------------------------
+.ipynb_checkpoints/
+
+# -----------------------------
+# Logs
+# -----------------------------
+logs/
+*.log
+
+# -----------------------------
+# Testing
+# -----------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# -----------------------------
+# Type Checkers
+# -----------------------------
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# -----------------------------
+# Package Managers
+# -----------------------------
+poetry.lock
+Pipfile.lock
+
+# Uncomment if using uv
+# uv.lock
+
+# -----------------------------
+# OS Files
+# -----------------------------
+.DS_Store
+Thumbs.db
+
+# -----------------------------
+# LangGraph / Agent Outputs
+# -----------------------------
+checkpoints/
+state/
+cache/
+memory/
+artifacts/
+outputs/
+reports/
+
+# -----------------------------
+# Temporary Files
+# -----------------------------
+tmp/
+temp/
+*.tmp
+
+# -----------------------------
+# Local Databases
+# -----------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# -----------------------------
+# Secrets
+# -----------------------------
+secrets.json
+credentials.json
+config.local.py
+
+# -----------------------------
+# Misc
+# -----------------------------
+*.bak
+*.swp
+*.swo
