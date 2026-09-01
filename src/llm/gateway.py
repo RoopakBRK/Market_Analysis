@@ -1,6 +1,6 @@
 from langchain.chat_models import init_chat_model
 
-from config.settings import settings
+from config import settings
 
 
 class LLMGateway:
