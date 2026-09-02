@@ -12,7 +12,7 @@ class ReportAgent:
         self.llm = get_llm().bind(response_format={"type": "json_object"})
 
         schema = DailyMarketReport.model_json_schema()
-        schema_str = json.dumps(schema, indent=2).replace("{", "{{").replace("}", "}}")
+        schema_str = json.dumps(schema, separators=(",", ":")).replace("{", "{{").replace("}", "}}")
         json_instruction = f"""
 Return ONLY valid JSON.
 Do NOT wrap JSON inside markdown.

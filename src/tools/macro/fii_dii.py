@@ -8,7 +8,6 @@ def get_fii_dii_flows() -> dict:
     Fetch the latest FII and DII cash market activity.
     """
     try:
-        # Note: True NSE API requires cookies. We fetch gracefully if cookies fail.
         session = requests.Session()
         session.get("https://www.nseindia.com", headers=make_headers(), timeout=10)
         
@@ -17,12 +16,19 @@ def get_fii_dii_flows() -> dict:
         response.raise_for_status()
         
         data = response.json()
-        # Data format is typically a list, we pick the first/latest entry
-        latest = data[0] if isinstance(data, list) and len(data) > 0 else {}
         
-        fii_net = float(latest.get("fii_net", 0.0) or 0.0)
-        dii_net = float(latest.get("dii_net", 0.0) or 0.0)
-        date = latest.get("date", "")
+        fii_net = 0.0
+        dii_net = 0.0
+        date = ""
+        
+        if isinstance(data, list):
+            for item in data:
+                if item.get("category") == "DII":
+                    dii_net = float(item.get("netValue", 0.0) or 0.0)
+                    date = item.get("date", "")
+                elif item.get("category") == "FII/FPI":
+                    fii_net = float(item.get("netValue", 0.0) or 0.0)
+                    date = item.get("date", "")
         
         return {
             "date": date,
@@ -31,7 +37,7 @@ def get_fii_dii_flows() -> dict:
             "unit": "INR Crore",
             "source": "NSE",
         }
-    except requests.RequestException:
+    except Exception:
         # Graceful degradation on network failures
         return {
             "date": "",

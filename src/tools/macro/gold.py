@@ -15,6 +15,8 @@ def get_gold_price() -> Optional[Dict[str, Any]]:
     
     return {
         "price": round(quote["price"], 2),
+        "previous_close": round(quote["previous_close"], 2),
+        "change": round(quote["change"], 2),
         "change_percent": round(quote["change_percent"], 2),
         "unit": "USD/Oz",
         "trend": trend,

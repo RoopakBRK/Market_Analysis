@@ -15,6 +15,8 @@ def get_usd_inr_rate() -> Optional[Dict[str, Any]]:
     
     return {
         "exchange_rate": round(quote["price"], 2),
+        "previous_close": round(quote["previous_close"], 2),
+        "change": round(quote["change"], 2),
         "change_percent": round(quote["change_percent"], 2),
         "trend": trend,
         "source": "Yahoo Finance",
