@@ -9,7 +9,7 @@ from src.prompts.report import SYSTEM_PROMPT
 
 class ReportAgent:
     def __init__(self):
-        self.llm = get_llm().bind(response_format={"type": "json_object"})
+        self.llm = get_llm()
 
         schema = DailyMarketReport.model_json_schema()
         schema_str = json.dumps(schema, separators=(",", ":")).replace("{", "{{").replace("}", "}}")
@@ -36,12 +36,10 @@ The JSON must strictly match this schema:
         messages = self.prompt.invoke(
             {
                 "input": f"""
-Macro
-
+Macro Data:
 {macro_summary}
 
-Sentiments
-
+Company Sentiments:
 {sentiments}
 """
             }
@@ -50,10 +48,18 @@ Sentiments
         response = self.llm.invoke(messages)
         
         try:
-            content = str(response.content)
+            content = str(response.content).strip()
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            else:
+                start = content.find('{')
+                end = content.rfind('}')
+                if start != -1 and end != -1:
+                    content = content[start:end+1]
+                    
             data = json.loads(content)
             return DailyMarketReport.model_validate(data)
-        except json.JSONDecodeError as e:
+        except Exception as e:
             raise ValueError(f"Failed to parse JSON from LLM: {e}\nResponse content: {response.content}")
-        except ValidationError as e:
-            raise e

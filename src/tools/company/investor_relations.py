@@ -50,7 +50,9 @@ def get_investor_relations(company: str) -> dict:
             "articles": deduplicate_articles(articles),
         }
 
-    except requests.RequestException:
+    except requests.RequestException as e:
+        import sys
+        print(f"Error in get_investor_relations: {e}", file=sys.stderr)
         # Graceful degradation on network failures
         return {
             "company": company,

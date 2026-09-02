@@ -49,7 +49,9 @@ def get_nse_announcements(company: str) -> dict:
             "articles": deduplicate_articles(articles),
         }
 
-    except requests.RequestException:
+    except requests.RequestException as e:
+        import sys
+        print(f"Error in get_nse_announcements: {e}", file=sys.stderr)
         # Graceful degradation on network failures
         return {
             "company": company,

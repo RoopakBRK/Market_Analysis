@@ -1,12 +1,13 @@
-from langchain_core.messages import SystemMessage, HumanMessage
+import json
+import ast
+from typing import TypedDict, Annotated, Any
+from langchain_core.messages import SystemMessage, HumanMessage, AnyMessage
+from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
-import json
-from pydantic import ValidationError
 
 from src.llm.gateway import get_llm
-from src.models.company import CompanyNews
-from src.graph.messages_state import AgentMessagesState
+from src.models.company import CompanyNews, NewsArticle
 from src.prompts.company import SYSTEM_PROMPT
 
 from src.tools.company.economic_times import search_economic_times_news
@@ -27,21 +28,25 @@ TOOLS = [
 ]
 
 
+class CompanyNewsState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    final_result: CompanyNews | None
+    company_input: str
+
+
 class CompanyNewsAgent:
     def __init__(self):
         self.llm = get_llm().bind_tools(TOOLS)
-        
-        self.formatter_llm = get_llm()
         
         # Tool Node
         self.tool_node = ToolNode(TOOLS)
         
         # Graph Builder
-        builder = StateGraph(AgentMessagesState)
+        builder = StateGraph(CompanyNewsState)
         
         builder.add_node("llm_node", self.call_llm)
         builder.add_node("tools_node", self.tool_node)
-        builder.add_node("formatter_node", self.format_output)
+        builder.add_node("merge_node", self.merge_output)
         
         builder.add_edge(START, "llm_node")
         
@@ -50,96 +55,110 @@ class CompanyNewsAgent:
             tools_condition,
             {
                 "tools": "tools_node",
-                "__end__": "formatter_node",
+                "__end__": "merge_node",
             },
         )
         
         builder.add_edge("tools_node", "llm_node")
-        builder.add_edge("formatter_node", END)
+        builder.add_edge("merge_node", END)
         
         self.graph = builder.compile()
 
-    def call_llm(self, state: AgentMessagesState):
+    def call_llm(self, state: CompanyNewsState):
         messages = state["messages"]
         response = self.llm.invoke(messages)
         return {"messages": [response]}
 
-    def format_output(self, state: AgentMessagesState):
-        messages = state["messages"]
+    def deduplicate_articles(self, articles: list[NewsArticle]) -> list[NewsArticle]:
+        seen_urls = set()
+        seen_titles = set()
+        deduped = []
+        for a in articles:
+            # Normalize title for fallback dedup
+            norm_title = a.title.strip().lower() if a.title else ""
+            
+            if a.url:
+                if a.url not in seen_urls:
+                    seen_urls.add(a.url)
+                    if norm_title:
+                        seen_titles.add(norm_title)
+                    deduped.append(a)
+            else:
+                if norm_title and norm_title not in seen_titles:
+                    seen_titles.add(norm_title)
+                    deduped.append(a)
+                    
+        return deduped
 
-        tool_results = [
-            message
-            for message in messages
-            if message.type == "tool"
-        ]
-
-        schema = CompanyNews.model_json_schema()
-
-        instruction = SystemMessage(
-            content=f"""You are a financial news formatter.
-
-Using ONLY the collected tool results below, produce the final
-company news output.
-
-Do NOT call tools.
-Do NOT invent information.
-Do NOT add information that is not present in the tool results.
-
-Return ONLY valid JSON.
-Do NOT wrap JSON in markdown.
-Do NOT explain anything.
-
-The JSON must strictly match this schema:
-
-    {json.dumps(schema, indent=2)}
-
-    Collected tool results:
-    """
-            + "\n".join(str(message.content) for message in tool_results)
+    def merge_output(self, state: CompanyNewsState):
+        company = state.get("company_input", "")
+        company_name = company
+        
+        all_articles_data = []
+        
+        for msg in state["messages"]:
+            if msg.type == "tool":
+                # Safely parse the tool string content
+                if isinstance(msg.content, dict):
+                    data = msg.content
+                else:
+                    content = str(msg.content).strip()
+                    data = None
+                    try:
+                        data = json.loads(content)
+                    except Exception:
+                        try:
+                            data = ast.literal_eval(content)
+                        except Exception:
+                            pass
+                
+                if not isinstance(data, dict):
+                    continue
+                
+                # Check if tool provided a longer, more descriptive company name
+                tool_company = data.get("company")
+                if tool_company and isinstance(tool_company, str) and len(tool_company) > len(company_name):
+                    company_name = tool_company
+                    
+                articles = data.get("articles", [])
+                if isinstance(articles, list):
+                    for a in articles:
+                        if isinstance(a, dict):
+                            all_articles_data.append(a)
+        
+        # Convert dictionary to Pydantic NewsArticle
+        news_articles = []
+        for a_data in all_articles_data:
+            try:
+                # model_validate is safer as it converts and validates types correctly
+                news_articles.append(NewsArticle.model_validate(a_data))
+            except Exception:
+                # Skip malformed articles
+                continue
+                
+        # Deduplicate
+        deduped_articles = self.deduplicate_articles(news_articles)
+        
+        result = CompanyNews(
+            ticker=company,
+            company_name=company_name,
+            articles=deduped_articles,
+            total_articles=len(deduped_articles)
         )
-
-        response = self.formatter_llm.invoke(
-            [
-                instruction,
-                HumanMessage(
-                    content="Analyze the collected company news and produce the required structured JSON output."
-                ),
-            ]
-        )
-
-        try:
-            content = str(response.content).strip()
-
-            if content.startswith("```"):
-                content = content.removeprefix("```json").removeprefix("```").strip()
-                content = content.removesuffix("```").strip()
-
-            data = json.loads(content)
-            result = CompanyNews.model_validate(data)
-            return {"final_result": result}
-
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Failed to parse formatter JSON: {e}\n"
-                f"Response: {response.content}"
-            ) from e
-
-        except ValidationError as e:
-            raise ValueError(
-                f"CompanyNews validation failed: {e}\n"
-                f"Response: {response.content}"
-            ) from e
+        
+        return {"final_result": result}
 
 
     def run(self, company: str) -> CompanyNews:
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=company)
+            HumanMessage(content=f"Fetch the latest news and announcements for {company}")
         ]
         
-        initial_state: AgentMessagesState = {
+        initial_state: CompanyNewsState = {
             "messages": messages,
-            "final_result": None
+            "final_result": None,
+            "company_input": company
         }
         state = self.graph.invoke(initial_state)
         return state["final_result"]

@@ -52,7 +52,9 @@ def search_economic_times_news(company: str) -> dict:
             "articles": deduplicate_articles(articles),
         }
 
-    except requests.RequestException:
+    except requests.RequestException as e:
+        import sys
+        print(f"Error in search_economic_times_news: {e}", file=sys.stderr)
         # Graceful degradation on network failures
         return {
             "company": company,

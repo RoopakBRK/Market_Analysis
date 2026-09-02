@@ -19,11 +19,14 @@ def macro_node(state):
     macro_summary = macro_agent.run()
     return {"macro_summary": macro_summary}
 
+import time
+
 def company_news_node(state):
     watchlist = state.get("watchlist", [])
     news = {}
     for company in watchlist:
         news[company] = company_agent.run(company)
+        time.sleep(2)  # Pace API requests to respect rate limits
     return {"company_news": news}
 
 def market_data_node(state):
@@ -41,6 +44,7 @@ def sentiment_node(state):
             state["company_news"][ticker],
             state["market_data"][ticker],
         )
+        time.sleep(2)  # Pace API requests to respect rate limits
     return {"sentiments": sentiments}
 
 def report_node(state):
