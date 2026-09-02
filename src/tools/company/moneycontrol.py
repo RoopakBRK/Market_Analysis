@@ -24,24 +24,35 @@ def search_moneycontrol_news(company: str) -> dict:
             
         articles = []
         
-        for selector in ARTICLE_SELECTORS:
-            nodes = parser.css(selector)
-            if nodes:
-                for link_node in nodes[:5]:
-                    title = clean_text(link_node.attributes.get("title") or link_node.text())
-                    link = absolute_url("https://www.moneycontrol.com", link_node.attributes.get("href") or "")
-                    
-                    if title and link:
-                        article = NewsArticle(
-                            title=title,
-                            summary="",
-                            url=link,
-                            published_at="",
-                            source="Moneycontrol",
-                            is_official=False,
-                        ).model_dump()
-                        articles.append(article)
-                break
+        nodes = parser.css(".clearfix a")
+        if not nodes:
+            nodes = parser.css("li.clearfix a")
+            
+        for link_node in nodes:
+            href = link_node.attributes.get("href") or ""
+            if "/news/" in href and href.endswith(".html") and "/tags/" not in href and "/category/" not in href:
+                title = clean_text(link_node.attributes.get("title") or link_node.text())
+                if len(title) > 20 and not title.lower().startswith("read more"):
+                    # Attempt to find summary in parent list item's <p> tag
+                    summary = ""
+                    parent = link_node.parent
+                    if parent:
+                        p_node = parent.css_first("p")
+                        if p_node:
+                            summary = clean_text(p_node.text())
+
+                    link = absolute_url("https://www.moneycontrol.com", href)
+                    article = NewsArticle(
+                        title=title,
+                        summary=summary,
+                        url=link,
+                        published_at="",
+                        source="Moneycontrol",
+                        is_official=False,
+                    ).model_dump()
+                    articles.append(article)
+                    if len(articles) >= 5:
+                        break
 
         return {
             "company": company,

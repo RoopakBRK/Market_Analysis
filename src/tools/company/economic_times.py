@@ -24,28 +24,24 @@ def search_economic_times_news(company: str) -> dict:
             
         articles = []
         
-        for selector in ARTICLE_SELECTORS:
-            nodes = parser.css(selector)
-            if nodes:
-                for node in nodes[:5]:
-                    title_node = node.css_first("h2, h3, h4, a")
-                    link_node = node.css_first("a")
-                    
-                    if title_node:
-                        title = clean_text(title_node.text())
-                        link = absolute_url("https://economictimes.indiatimes.com", link_node.attributes.get("href") or "") if link_node else ""
-                        
-                        if title:
-                            article = NewsArticle(
-                                title=title,
-                                summary="",
-                                url=link,
-                                published_at="",
-                                source="Economic Times",
-                                is_official=False,
-                            ).model_dump()
-                            articles.append(article)
-                break
+        nodes = parser.css("a")
+        for node in nodes:
+            href = node.attributes.get("href") or ""
+            if "/articleshow/" in href and "/topic/" not in href:
+                title = clean_text(node.text())
+                if len(title) > 20 and not title.lower().startswith("read more"):
+                    link = absolute_url("https://economictimes.indiatimes.com", href)
+                    article = NewsArticle(
+                        title=title,
+                        summary="",
+                        url=link,
+                        published_at="",
+                        source="Economic Times",
+                        is_official=False,
+                    ).model_dump()
+                    articles.append(article)
+                    if len(articles) >= 5:
+                        break
                 
         return {
             "company": company,

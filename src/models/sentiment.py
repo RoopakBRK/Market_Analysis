@@ -12,21 +12,12 @@ class SentimentResult(BaseModel):
 
     company_name: str
 
-    overall_sentiment: Literal[
-        "Positive",
+    sentiment: Literal[
+        "Bullish",
+        "Bearish",
         "Neutral",
-        "Negative",
+        "Unknown",
     ]
-
-    impact: Literal[
-        "Low",
-        "Medium",
-        "High",
-    ]
-
-    expected_duration: str = Field(
-        description="Expected duration of the impact (e.g. '1-3 trading sessions')."
-    )
 
     confidence: int = Field(
         ge=0,
@@ -34,14 +25,27 @@ class SentimentResult(BaseModel):
         description="Confidence score between 0 and 100."
     )
 
-    reasons: list[str] = Field(
-        default_factory=list,
-        description="Key reasons supporting the sentiment."
+    impact: Literal[
+        "High",
+        "Medium",
+        "Low",
+        "Unknown",
+    ]
+
+    summary: str = Field(
+        description="Concise summary of what happened and why it matters."
     )
 
-    citations: list[str] = Field(
+    positive_drivers: list[str] = Field(
         default_factory=list,
-        description="Sources used to generate the sentiment."
+        description="Specific positive factors from the supplied articles."
     )
 
-    last_updated: str
+    negative_drivers: list[str] = Field(
+        default_factory=list,
+        description="Specific negative factors from the supplied articles."
+    )
+
+    articles_analyzed: int = Field(
+        description="Number of articles used to determine this sentiment."
+    )

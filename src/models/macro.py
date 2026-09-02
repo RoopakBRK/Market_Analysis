@@ -36,3 +36,8 @@ class MacroSummary(BaseModel):
     last_updated: str = Field(
         description="Timestamp when the summary was generated."
     )
+
+    market_data: dict = Field(
+        default_factory=dict,
+        description="Deterministic raw market data from tools.",
+    )

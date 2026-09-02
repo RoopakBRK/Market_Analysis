@@ -13,6 +13,7 @@ ARTICLE_SELECTORS = [".search-results__item__2oqiX a"]
 def search_reuters_news(company: str) -> dict:
     """
     Search Reuters for company-specific news.
+    NOTE: Currently degraded. Reuters uses strict Cloudflare anti-bot protection.
     """
     try:
         formatted_company = urllib.parse.quote(company.strip())

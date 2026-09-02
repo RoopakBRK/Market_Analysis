@@ -8,7 +8,8 @@ from src.tools.common.scraper_utils import deduplicate_articles, make_headers
 @tool
 def get_nse_announcements(company: str) -> dict:
     """
-    Fetch latest NSE announcements for a company.
+    Fetch latest NSE company announcements.
+    NOTE: Currently degraded. The NSE API returns 403 Forbidden without valid session cookies.
     """
     try:
         session = requests.Session()

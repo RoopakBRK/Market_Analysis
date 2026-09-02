@@ -13,6 +13,7 @@ ARTICLE_SELECTORS = [".result__snippet", ".result__url"]
 def get_investor_relations(company: str) -> dict:
     """
     Fetch latest Investor Relations updates.
+    NOTE: Currently degraded. DuckDuckGo HTML search returns 202 Accepted to challenge bots.
     """
     try:
         query = f"{company} investor relations press releases"

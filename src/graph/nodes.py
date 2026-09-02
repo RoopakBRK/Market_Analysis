@@ -16,7 +16,20 @@ macro_agent = MacroAgent()
 
 
 def macro_node(state):
-    macro_summary = macro_agent.run()
+    try:
+        macro_summary = macro_agent.run()
+    except Exception as e:
+        print(f"[Graph Warning] MacroAgent failed: {e}")
+        from src.models.macro import MacroSummary
+        macro_summary = MacroSummary(
+            overall_sentiment="Unknown",
+            confidence=0,
+            summary="Macro agent failed to run.",
+            key_drivers=[],
+            market_events=[],
+            last_updated="Unknown",
+            market_data={}
+        )
     return {"macro_summary": macro_summary}
 
 import time
@@ -25,31 +38,65 @@ def company_news_node(state):
     watchlist = state.get("watchlist", [])
     news = {}
     for company in watchlist:
-        news[company] = company_agent.run(company)
-        time.sleep(2)  # Pace API requests to respect rate limits
+        try:
+            news[company] = company_agent.run(company)
+        except Exception as e:
+            print(f"[Graph Warning] CompanyNewsAgent failed for {company}: {e}")
+            from src.models.company import CompanyNews
+            news[company] = CompanyNews(ticker=company, company_name=company, articles=[], total_articles=0)
+        time.sleep(2)  # Pace API requests
     return {"company_news": news}
 
 def market_data_node(state):
     watchlist = state.get("watchlist", [])
     market_data = {}
     for ticker in watchlist:
-        market_data[ticker] = market_agent.run(ticker)
+        try:
+            market_data[ticker] = market_agent.run(ticker)
+        except Exception as e:
+            print(f"[Graph Warning] MarketDataAgent failed for {ticker}: {e}")
+            market_data[ticker] = {}
     return {"market_data": market_data}
 
 def sentiment_node(state):
     sentiments = {}
     for ticker in state.get("company_news", {}):
-        sentiments[ticker] = sentiment_agent.run(
-            state["macro_summary"],
-            state["company_news"][ticker],
-            state["market_data"][ticker],
-        )
-        time.sleep(2)  # Pace API requests to respect rate limits
+        try:
+            sentiments[ticker] = sentiment_agent.run(
+                state["company_news"].get(ticker)
+            )
+        except Exception as e:
+            print(f"[Graph Warning] SentimentAgent failed for {ticker}: {e}")
+            from src.models.sentiment import SentimentResult
+            sentiments[ticker] = SentimentResult(
+                ticker=ticker,
+                company_name=ticker,
+                sentiment="Unknown",
+                confidence=0,
+                impact="Unknown",
+                summary="Sentiment analysis failed.",
+                positive_drivers=[],
+                negative_drivers=[],
+                articles_analyzed=0
+            )
+        time.sleep(2)  # Pace API requests
     return {"sentiments": sentiments}
 
 def report_node(state):
-    report = report_agent.run(
-        state["macro_summary"],
-        state["sentiments"],
-    )
+    try:
+        report = report_agent.run(
+            state.get("macro_summary"),
+            state.get("sentiments"),
+        )
+    except Exception as e:
+        print(f"[Graph Warning] ReportAgent failed: {e}")
+        from src.models.report import DailyMarketReport
+        report = DailyMarketReport(
+            report_date="Unknown",
+            executive_summary="Report generation failed.",
+            macro_overview="Unknown",
+            top_positive_stocks=[],
+            top_negative_stocks=[],
+            important_events=[]
+        )
     return {"report": report}

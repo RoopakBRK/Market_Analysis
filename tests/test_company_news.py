@@ -60,37 +60,59 @@ def test_tools():
 
     print(json.dumps(results, indent=2, default=str))
 
-    return results
+import pytest
+@pytest.fixture
+def raw_results():
+    return {
+        "Economic Times": {"articles": [{"title": "Test 1"}], "company": "RELIANCE"},
+        "Moneycontrol": {"articles": [{"title": "Test 2"}], "company": "RELIANCE"}
+    }
 
-
-def test_agent():
-    print("\n" + "=" * 70)
-    print("COMPANY NEWS AGENT TEST")
-    print("=" * 70)
+def test_agent(raw_results, monkeypatch):
+    class MockLLM:
+        def bind_tools(self, *args, **kwargs):
+            return self
+        def invoke(self, *args, **kwargs):
+            from langchain_core.messages import AIMessage
+            return AIMessage(content="", tool_calls=[
+                {"name": "search_economic_times_news", "args": {"company": "RELIANCE"}, "id": "1"},
+                {"name": "search_moneycontrol_news", "args": {"company": "RELIANCE"}, "id": "2"}
+            ])
+            
+    import src.agents.company_news_agent
+    monkeypatch.setattr("src.agents.company_news_agent.get_llm", lambda agent_name="": MockLLM())
+    
+    print("\n" + "=" * 60)
+    print("COMPANY NEWS QUALITY AUDIT")
+    print("=" * 60)
 
     agent = CompanyNewsAgent()
-
     result = agent.run(COMPANY)
 
-    print(f"\nTicker:         {result.ticker}")
-    print(f"Company:        {result.company_name}")
-    print(f"Total Articles: {result.total_articles}")
+    print(f"\nCompany: {result.company_name}")
 
-    print("\nArticles:")
-    print("-" * 70)
+    raw_articles_count = sum(len(res.get("articles", [])) if isinstance(res, dict) else 0 for res in raw_results.values())
+    
+    # We can approximate intermediate counts, or just show raw -> final
+    # The agent hides the internals in `rank_and_filter_articles` unless we mock it or extract it.
+    # We'll just show Raw vs Final, or we can mock it here for the audit.
+    
+    print(f"Raw articles:               {raw_articles_count}")
+    print(f"Final articles:             {result.total_articles}")
+
+    print("\nRANK | SCORE | SOURCE | DATE | TITLE")
+    print("-" * 60)
 
     for i, article in enumerate(result.articles, 1):
-        print(f"\n{i}. {article.title}")
-        print(f"   Source:     {article.source}")
-        print(f"   Official:   {article.is_official}")
-        print(f"   Published:  {article.published_at}")
-        print(f"   URL:        {article.url}")
+        score = agent.score_article(article)
+        source = (article.source or "")[:2].upper()
+        date = (article.published_at or "N/A")[:10]
+        title = (article.title or "")[:60]
+        
+        print(f"{i:<4} | {score:<5} | {source:<6} | {date:<4} | {title}")
 
-    print("\n" + "=" * 70)
-
-    return result
-
+    print("\n" + "=" * 60)
 
 if __name__ == "__main__":
-    test_tools()
-    test_agent()
+    raw_results = test_tools()
+    test_agent(raw_results)

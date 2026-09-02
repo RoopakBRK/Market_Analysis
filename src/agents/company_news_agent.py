@@ -36,7 +36,7 @@ class CompanyNewsState(TypedDict):
 
 class CompanyNewsAgent:
     def __init__(self):
-        self.llm = get_llm().bind_tools(TOOLS)
+        self.llm = get_llm(agent_name="CompanyNewsAgent").bind_tools(TOOLS)
         
         # Tool Node
         self.tool_node = ToolNode(TOOLS)
@@ -69,26 +69,104 @@ class CompanyNewsAgent:
         response = self.llm.invoke(messages)
         return {"messages": [response]}
 
-    def deduplicate_articles(self, articles: list[NewsArticle]) -> list[NewsArticle]:
+    def normalize_url(self, url: str) -> str:
+        import urllib.parse
+        if not url: return ""
+        parsed = urllib.parse.urlparse(url)
+        # Remove tracking parameters
+        query = urllib.parse.parse_qs(parsed.query)
+        query = {k: v for k, v in query.items() if not k.startswith("utm_")}
+        new_query = urllib.parse.urlencode(query, doseq=True)
+        # Reconstruct URL without fragment
+        clean_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip('/'), parsed.params, new_query, ''))
+        return clean_url
+
+    def normalize_title(self, title: str) -> str:
+        import re
+        if not title: return ""
+        # Lowercase and remove all non-alphanumeric characters
+        return re.sub(r'[^a-z0-9]', '', title.lower())
+
+    def score_article(self, article: NewsArticle) -> int:
+        score = 0
+        text = f"{article.title or ''} {article.summary or ''}".lower()
+        
+        # Relevance Scoring
+        if any(w in text for w in ["earnings", "results", "profit", "revenue", "q1", "q2", "q3", "q4"]):
+            score += 10
+        elif any(w in text for w in ["acquisition", "buyout", "merger"]):
+            score += 10
+        elif any(w in text for w in ["investment", "stake", "fund"]):
+            score += 9
+        elif any(w in text for w in ["dividend", "bonus", "buyback"]):
+            score += 8
+        elif any(w in text for w in ["contract", "deal", "partnership", "regulatory"]):
+            score += 8
+        elif any(w in text for w in ["market", "nifty", "sensex", "stocks in news"]):
+            # Generic market articles get penalized unless they specifically mention company earnings
+            score -= 5
+        else:
+            score += 1 # generic company mention
+            
+        # Source Scoring
+        source = article.source or ""
+        if source in ["NSE", "Investor Relations"]:
+            score += 10
+        elif source == "Reuters":
+            score += 9
+        elif source == "Economic Times":
+            score += 8
+        elif source in ["Moneycontrol", "Mint"]:
+            score += 7
+            
+        return score
+
+    def rank_and_filter_articles(self, articles: list[NewsArticle], top_n: int = 10, max_per_source: int = 5) -> list[NewsArticle]:
         seen_urls = set()
         seen_titles = set()
         deduped = []
+        
+        # Deduplication
         for a in articles:
-            # Normalize title for fallback dedup
-            norm_title = a.title.strip().lower() if a.title else ""
+            norm_url = self.normalize_url(a.url)
+            norm_title = self.normalize_title(a.title)
             
-            if a.url:
-                if a.url not in seen_urls:
-                    seen_urls.add(a.url)
-                    if norm_title:
-                        seen_titles.add(norm_title)
-                    deduped.append(a)
-            else:
-                if norm_title and norm_title not in seen_titles:
-                    seen_titles.add(norm_title)
-                    deduped.append(a)
-                    
-        return deduped
+            if norm_url and norm_url in seen_urls:
+                continue
+            if norm_title and norm_title in seen_titles:
+                continue
+                
+            if norm_url: seen_urls.add(norm_url)
+            if norm_title: seen_titles.add(norm_title)
+            
+            # Store original article with its score dynamically attached for sorting
+            a._score = self.score_article(a)
+            deduped.append(a)
+            
+        # Sort by score descending
+        deduped.sort(key=lambda x: getattr(x, '_score', 0), reverse=True)
+        
+        # Filter and enforce diversity
+        final_articles = []
+        source_counts = {}
+        
+        for a in deduped:
+            if getattr(a, '_score', 0) < 0:
+                continue # Skip terrible articles
+                
+            source = a.source or "Unknown"
+            count = source_counts.get(source, 0)
+            if count >= max_per_source:
+                continue
+                
+            source_counts[source] = count + 1
+            # Clean up the dynamic attribute before Pydantic validation later
+            final_articles.append(a)
+            
+            if len(final_articles) >= top_n:
+                break
+                
+        return final_articles
 
     def merge_output(self, state: CompanyNewsState):
         company = state.get("company_input", "")
@@ -98,7 +176,6 @@ class CompanyNewsAgent:
         
         for msg in state["messages"]:
             if msg.type == "tool":
-                # Safely parse the tool string content
                 if isinstance(msg.content, dict):
                     data = msg.content
                 else:
@@ -115,7 +192,6 @@ class CompanyNewsAgent:
                 if not isinstance(data, dict):
                     continue
                 
-                # Check if tool provided a longer, more descriptive company name
                 tool_company = data.get("company")
                 if tool_company and isinstance(tool_company, str) and len(tool_company) > len(company_name):
                     company_name = tool_company
@@ -130,20 +206,23 @@ class CompanyNewsAgent:
         news_articles = []
         for a_data in all_articles_data:
             try:
-                # model_validate is safer as it converts and validates types correctly
                 news_articles.append(NewsArticle.model_validate(a_data))
             except Exception:
-                # Skip malformed articles
                 continue
                 
-        # Deduplicate
-        deduped_articles = self.deduplicate_articles(news_articles)
+        # Rank, filter and deduplicate
+        final_articles = self.rank_and_filter_articles(news_articles, top_n=5, max_per_source=5)
+        
+        # Clean up dynamic _score attribute before returning to avoid Pydantic issues
+        for a in final_articles:
+            if hasattr(a, '_score'):
+                delattr(a, '_score')
         
         result = CompanyNews(
             ticker=company,
             company_name=company_name,
-            articles=deduped_articles,
-            total_articles=len(deduped_articles)
+            articles=final_articles,
+            total_articles=len(final_articles)
         )
         
         return {"final_result": result}

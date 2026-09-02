@@ -9,7 +9,7 @@ from src.prompts.report import SYSTEM_PROMPT
 
 class ReportAgent:
     def __init__(self):
-        self.llm = get_llm()
+        self.llm = get_llm(agent_name="ReportAgent")
 
         schema = DailyMarketReport.model_json_schema()
         schema_str = json.dumps(schema, separators=(",", ":")).replace("{", "{{").replace("}", "}}")
@@ -33,11 +33,18 @@ The JSON must strictly match this schema:
         macro_summary,
         sentiments,
     ) -> DailyMarketReport:
+        
+        # Exclude market_data to save massive token usage
+        if hasattr(macro_summary, "model_dump"):
+            macro_data_clean = macro_summary.model_dump(exclude={"market_data"})
+        else:
+            macro_data_clean = macro_summary
+
         messages = self.prompt.invoke(
             {
                 "input": f"""
 Macro Data:
-{macro_summary}
+{macro_data_clean}
 
 Company Sentiments:
 {sentiments}

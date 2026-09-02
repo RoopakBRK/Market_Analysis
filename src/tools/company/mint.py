@@ -13,6 +13,7 @@ ARTICLE_SELECTORS = [".headline"]
 def search_mint_news(company: str) -> dict:
     """
     Search Mint for company-specific news.
+    NOTE: Currently degraded. The Livemint search endpoint returns 404/410.
     """
     try:
         formatted_company = urllib.parse.quote(company.strip().lower().replace(" ", "-"))

@@ -31,7 +31,7 @@ TOOLS = [
 class MacroAgent:
     def __init__(self):
         # Plain LLM for final JSON formatting
-        self.formatter_llm = get_llm()
+        self.formatter_llm = get_llm(agent_name="MacroAgent")
 
         # Graph builder
         builder = StateGraph(AgentMessagesState)
@@ -77,84 +77,103 @@ class MacroAgent:
 
     def format_output(self, state: AgentMessagesState):
         """Convert collected tool results into a validated MacroSummary."""
-
+        import re
+        from src.models.macro import MacroSummary
+        
         messages = state["messages"]
 
-        # Extract only the outputs returned by tools.
-        tool_results = [
-            message
-            for message in messages
-            if message.type == "tool"
-        ]
+        # 1. Deterministically build the raw market data dictionary
+        raw_market_data = {}
+        for msg in messages:
+            if msg.type == "tool":
+                tool_name = msg.name.replace("get_", "").replace("_price", "").replace("_data", "").replace("_updates", "").replace("_summary", "").replace("_rate", "")
+                
+                # safely parse the raw string back to dict since it was converted to string in collect_data
+                content = str(msg.content).strip()
+                try:
+                    # In python strings from dicts use single quotes, ast.literal_eval is safest
+                    import ast
+                    data = ast.literal_eval(content)
+                    raw_market_data[tool_name] = data
+                except BaseException:
+                    raw_market_data[tool_name] = {"error": "Failed to parse tool output"}
 
-        # Generate the Pydantic JSON schema.
+        # 2. Prepare the prompt for the reasoning LLM
         schema = MacroSummary.model_json_schema()
+        # Remove the market_data field from the schema prompt since the LLM shouldn't generate it
+        if "properties" in schema and "market_data" in schema["properties"]:
+            del schema["properties"]["market_data"]
 
-        # Build a clean formatting prompt.
-        tool_data = "\n\n".join(
-            f"Tool: {message.name}\nData: {str(message.content)}"
-            for message in tool_results
-        )
+        tool_data_str = json.dumps(raw_market_data, indent=2)
 
         instruction = SystemMessage(
-            content=f"""You are a financial market intelligence formatter.
+            content=f"""You are a financial market intelligence expert.
 
-Your task is to convert the collected macroeconomic tool results
-into a structured macro market summary.
-
-Use ONLY the information contained in the tool results.
+Your task is to analyze the provided macroeconomic data and generate a structured sentiment summary.
 
 Rules:
 - Do NOT call any tools.
 - Do NOT invent information.
-- Do NOT infer unsupported facts.
-- Do NOT add information that is not present in the tool results.
-- If information is unavailable, represent it according to the schema.
-- Return ONLY valid JSON.
-- Do NOT wrap JSON inside markdown.
-- Do NOT explain your answer.
+- Return ONLY valid JSON representing the object itself (NOT a JSON schema).
+- Do NOT wrap JSON inside markdown blocks (e.g. ```json).
 - Do NOT add any text before or after the JSON.
 
-The JSON must strictly match this Pydantic schema:
+The JSON MUST contain exactly these keys and types:
 
-{json.dumps(schema, indent=2)}
+{json.dumps(schema.get("properties", schema), indent=2)}
 
-Collected macroeconomic tool results:
+Macroeconomic Data:
 
-{tool_data}
+{tool_data_str}
 """
         )
 
-        # IMPORTANT:
-        # formatter_llm is NOT bound to any tools.
-        response = self.formatter_llm.invoke(
-    [
-        instruction,
-        HumanMessage(
-            content="Analyze the collected macroeconomic data and produce the required MacroSummary JSON."
-        ),
-    ]
-)
+        # 3. Call the reasoning LLM (we only make ONE LLM call here)
+        # Using self.formatter_llm as the reasoning LLM.
+        response = self.formatter_llm.invoke([
+            instruction,
+            HumanMessage(content="Analyze the collected macroeconomic data and produce the required JSON sentiment summary.")
+        ])
 
+        content = str(response.content).strip()
 
-        content = str(response.content)
+        # 4. Diagnostic Error Handling
+        if not content:
+            model_info = getattr(self.formatter_llm, 'model', 'unknown model')
+            prompt_len = len(instruction.content)
+            raise ValueError(
+                f"MacroAgent LLM Failure: The model '{model_info}' returned an entirely empty response.\n"
+                f"This usually indicates a context length issue (prompt length: {prompt_len} chars) "
+                f"or a model generation filter. Please try a different model or reduce data size."
+            )
+
+        # Defensive JSON parsing
+        json_content = content
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if match:
+            json_content = match.group(0)
 
         try:
-            data = json.loads(content)
-
+            data = json.loads(json_content)
+            # If the model accidentally wrapped it in a schema definition
+            if "properties" in data and "overall_sentiment" in data["properties"]:
+                data = data["properties"]
         except json.JSONDecodeError as e:
             raise ValueError(
-                "Failed to parse JSON from macro formatter LLM.\n"
+                f"Failed to parse JSON from MacroAgent LLM.\n"
                 f"Error: {e}\n"
-                f"Response content: {content}"
+                f"Response content:\n{content}"
             ) from e
 
+        # 5. Deterministically attach the raw market data
+        data["market_data"] = raw_market_data
+
+        # 6. Validate
         try:
             result = MacroSummary.model_validate(data)
-
         except ValidationError as e:
             raise ValueError(
-                "MacroSummary validation failed.\n"
+                f"MacroSummary validation failed.\n"
                 f"Validation error: {e}\n"
                 f"Parsed data: {data}"
             ) from e
