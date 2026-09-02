@@ -24,5 +24,6 @@ reportlab
 pytest
 pydantic-settings
 prometheus-client
+pyright
 
 

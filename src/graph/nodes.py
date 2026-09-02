@@ -2,6 +2,9 @@ from src.agents.macro_agent import MacroAgent
 from src.agents.company_news_agent import CompanyNewsAgent
 from src.agents.market_data_agent import MarketDataAgent
 from src.agents.sentiment_agent import SentimentAgent
+from src.agents.report_agent import ReportAgent
+
+report_agent = ReportAgent()
 
 sentiment_agent = SentimentAgent()
 market_agent = MarketDataAgent()
@@ -59,5 +62,16 @@ def sentiment_node(state):
         )
 
     state["sentiments"] = sentiments
+
+    return state
+
+def report_node(state):
+
+    report = report_agent.run(
+        state["macro_summary"],
+        state["sentiments"],
+    )
+
+    state["report"] = report
 
     return state
