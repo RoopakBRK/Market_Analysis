@@ -1,4 +1,5 @@
-from typing import TypedDict
+from typing import TypedDict, Annotated
+import operator
 
 from src.models.company import CompanyNews
 from src.models.macro import MacroSummary
@@ -9,7 +10,7 @@ from src.models.sentiment import SentimentResult
 
 class GraphState(TypedDict):
 
-    watchlist: list[str]
+    watchlist: Annotated[list[str], operator.add]
 
     macro_summary: MacroSummary | None
 

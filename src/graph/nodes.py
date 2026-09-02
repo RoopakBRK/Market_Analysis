@@ -16,62 +16,36 @@ macro_agent = MacroAgent()
 
 
 def macro_node(state):
-
     macro_summary = macro_agent.run()
-
-    state["macro_summary"] = macro_summary
-
-    return state
+    return {"macro_summary": macro_summary}
 
 def company_news_node(state):
-
     watchlist = state.get("watchlist", [])
-
     news = {}
-
     for company in watchlist:
         news[company] = company_agent.run(company)
-
-    state["company_news"] = news
-
-    return state
+    return {"company_news": news}
 
 def market_data_node(state):
-
     watchlist = state.get("watchlist", [])
-
     market_data = {}
-
     for ticker in watchlist:
         market_data[ticker] = market_agent.run(ticker)
-
-    state["market_data"] = market_data
-
-    return state
+    return {"market_data": market_data}
 
 def sentiment_node(state):
-
     sentiments = {}
-
-    for ticker in state["company_news"]:
-
+    for ticker in state.get("company_news", {}):
         sentiments[ticker] = sentiment_agent.run(
             state["macro_summary"],
             state["company_news"][ticker],
             state["market_data"][ticker],
         )
-
-    state["sentiments"] = sentiments
-
-    return state
+    return {"sentiments": sentiments}
 
 def report_node(state):
-
     report = report_agent.run(
         state["macro_summary"],
         state["sentiments"],
     )
-
-    state["report"] = report
-
-    return state
+    return {"report": report}
