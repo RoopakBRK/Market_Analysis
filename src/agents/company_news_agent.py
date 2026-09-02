@@ -43,7 +43,7 @@ class CompanyNewsAgent:
         self.llm = (
             get_llm()
             .bind_tools(TOOLS)
-            .with_structured_output(CompanyNews)
+            .with_structured_output(CompanyNews) # type: ignore
         )
 
         self.prompt = ChatPromptTemplate.from_messages(

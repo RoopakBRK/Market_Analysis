@@ -35,7 +35,8 @@ def get_sector_performance(sector: str) -> dict:
                     if sector.lower() in sector_name.lower():
                         perf_text = cols[2].text.strip().replace("%", "")
                         performance = float(perf_text) if perf_text else 0.0
-                        leader = cols[0].find("a").text.strip() if cols[0].find("a") else sector_name
+                        a_tag = cols[0].find("a")
+                        leader = a_tag.text.strip() if a_tag else sector_name
                         break
         
         return {

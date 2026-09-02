@@ -33,7 +33,7 @@ class MarketDataAgent:
         self.llm = (
             get_llm()
             .bind_tools(TOOLS)
-            .with_structured_output(MarketData)
+            .with_structured_output(MarketData) # type: ignore
         )
 
         self.prompt = ChatPromptTemplate.from_messages(

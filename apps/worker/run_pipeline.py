@@ -4,9 +4,13 @@ Worker entry point for running intelligence pipelines.
 from src.graph.workflow import graph
 
 
+from src.graph.state import GraphState
+
+
 def main():
 
-    initial_state = {
+    initial_state: GraphState = {
+        "watchlist": ["Reliance", "TCS", "Infosys"],
         "macro_summary": None,
         "company_news": {},
         "market_data": {},

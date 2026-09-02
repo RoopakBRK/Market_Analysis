@@ -29,7 +29,7 @@ def search_reuters_news(company: str) -> dict:
             if nodes:
                 for link_node in nodes[:5]:
                     title = clean_text(link_node.text())
-                    link = absolute_url("https://www.reuters.com", link_node.attributes.get("href", ""))
+                    link = absolute_url("https://www.reuters.com", link_node.attributes.get("href") or "")
                     
                     if title and link:
                         article = NewsArticle(

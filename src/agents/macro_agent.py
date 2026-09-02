@@ -40,7 +40,11 @@ Return the final answer as the required structured output.
 class MacroAgent:
 
     def __init__(self):
-        self.llm = get_llm().bind_tools(TOOLS).with_structured_output(MacroSummary)
+        self.llm = (
+            get_llm()
+            .bind_tools(TOOLS)
+            .with_structured_output(MacroSummary) # type: ignore
+        )
 
         self.prompt = ChatPromptTemplate.from_messages(
             [

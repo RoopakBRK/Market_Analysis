@@ -31,7 +31,7 @@ def search_mint_news(company: str) -> dict:
                     link_node = node.css_first("a")
                     if link_node:
                         title = clean_text(link_node.text())
-                        link = absolute_url("https://www.livemint.com", link_node.attributes.get("href", ""))
+                        link = absolute_url("https://www.livemint.com", link_node.attributes.get("href") or "")
                         
                         if title:
                             article = NewsArticle(

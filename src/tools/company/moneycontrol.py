@@ -29,7 +29,7 @@ def search_moneycontrol_news(company: str) -> dict:
             if nodes:
                 for link_node in nodes[:5]:
                     title = clean_text(link_node.attributes.get("title") or link_node.text())
-                    link = absolute_url("https://www.moneycontrol.com", link_node.attributes.get("href", ""))
+                    link = absolute_url("https://www.moneycontrol.com", link_node.attributes.get("href") or "")
                     
                     if title and link:
                         article = NewsArticle(

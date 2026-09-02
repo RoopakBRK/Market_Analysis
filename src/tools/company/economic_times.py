@@ -33,7 +33,7 @@ def search_economic_times_news(company: str) -> dict:
                     
                     if title_node:
                         title = clean_text(title_node.text())
-                        link = absolute_url("https://economictimes.indiatimes.com", link_node.attributes.get("href") if link_node else "")
+                        link = absolute_url("https://economictimes.indiatimes.com", link_node.attributes.get("href") or "") if link_node else ""
                         
                         if title:
                             article = NewsArticle(

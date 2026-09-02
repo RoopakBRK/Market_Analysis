@@ -9,6 +9,8 @@ from src.models.sentiment import SentimentResult
 
 class GraphState(TypedDict):
 
+    watchlist: list[str]
+
     macro_summary: MacroSummary | None
 
     company_news: dict[str, CompanyNews]

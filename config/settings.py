@@ -1,13 +1,10 @@
 import os
 from functools import lru_cache
-from python_dotenv import load_dotenv
+from dotenv import load_dotenv
 
 load_dotenv()
 
-try:
-    from pydantic_settings import BaseSettings, SettingsConfigDict
-except ImportError:
-    from pydantic import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")

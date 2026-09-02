@@ -1,4 +1,5 @@
 from langchain.chat_models import init_chat_model
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from config.settings import settings
 
@@ -38,9 +39,9 @@ class LLMGateway:
 gateway = LLMGateway()
 
 
-def get_llm():
+def get_llm() -> BaseChatModel:
     return gateway.get_llm()
 
 
-def get_fallback_llm():
+def get_fallback_llm() -> BaseChatModel:
     return gateway.get_fallback_llm()

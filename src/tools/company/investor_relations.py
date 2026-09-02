@@ -26,7 +26,7 @@ def get_investor_relations(company: str) -> dict:
         
         nodes = parser.css("a.result__url")[:5]
         for node in nodes:
-            link = absolute_url("", node.attributes.get("href", ""))
+            link = absolute_url("", node.attributes.get("href") or "")
             
             # Find the closest previous title snippet
             # duckduckgo layout uses a class result__snippet for titles sometimes
