@@ -1,0 +1,3 @@
+"""
+LLM Structured Output utilities.
+"""
