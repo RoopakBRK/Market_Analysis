@@ -1,7 +1,40 @@
+from typing import Optional
 from pydantic import BaseModel, Field
 
 from src.models.macro import MacroSummary
 from src.models.sentiment import SentimentResult
+
+
+class CompanyIntelligence(BaseModel):
+    """
+    Per-company intelligence section within the daily report.
+    """
+
+    ticker: str
+    company_name: str
+
+    # Overall sentiment label for this company.
+    sentiment: str
+    confidence: int = Field(ge=0, le=100)
+
+    # Key signals broken out by source type.
+    key_positive_signals: list[str] = Field(default_factory=list)
+    key_negative_signals: list[str] = Field(default_factory=list)
+
+    # News headlines / top articles relevant to today.
+    important_news: list[str] = Field(default_factory=list)
+
+    # Relevant financial context (PE, events, etc.) from FinancialDataAgent.
+    financial_context: Optional[str] = None
+
+    # Reddit / community signal (explicitly labeled as community source).
+    reddit_community_signal: Optional[str] = None
+
+    # How today's macro environment affects this company.
+    macro_relevance: Optional[str] = None
+
+    # Final synthesised interpretation for this company.
+    overall_interpretation: str = ""
 
 
 class DailyMarketReport(BaseModel):
@@ -13,23 +46,30 @@ class DailyMarketReport(BaseModel):
 
     overall_market_sentiment: str
 
-    overall_confidence: int = Field(
-        ge=0,
-        le=100,
-    )
+    overall_confidence: int = Field(ge=0, le=100)
 
+    # Full MacroSummary object for downstream use / serialisation.
     macro_summary: MacroSummary
 
-    top_positive_stocks: list[SentimentResult] = Field(
-        default_factory=list
-    )
+    # Narrative macro overview for human readers.
+    macro_overview: str = ""
 
-    top_negative_stocks: list[SentimentResult] = Field(
-        default_factory=list
-    )
+    # Primary macro drivers (FII/DII, crude, USD/INR, US markets, etc.).
+    key_macro_drivers: list[str] = Field(default_factory=list)
 
-    market_events: list[str] = Field(
-        default_factory=list
-    )
+    # Per-company intelligence sections.
+    company_intelligence: list[CompanyIntelligence] = Field(default_factory=list)
+
+    # Backward-compatible aggregate lists (used by existing pipeline display).
+    top_positive_stocks: list[SentimentResult] = Field(default_factory=list)
+    top_negative_stocks: list[SentimentResult] = Field(default_factory=list)
+
+    # Important market events (earnings, RBI, government actions, etc.).
+    market_events: list[str] = Field(default_factory=list)
+
+    # Synthesised final market view and risk/catalyst assessment.
+    final_market_view: str = ""
+    major_catalysts: list[str] = Field(default_factory=list)
+    major_risks: list[str] = Field(default_factory=list)
 
     generated_at: str

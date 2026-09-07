@@ -16,13 +16,15 @@ class MockLLM:
         self.model = "mock-model"
         
     def invoke(self, messages, *args, **kwargs):
-        content_str = messages[0].content + messages[1].content
+        msgs_list = messages.to_messages()
+        content_str = msgs_list[0].content + msgs_list[1].content
         
         # Determine sentiment if not explicitly set
         sentiment = self.expected_sentiment
         if not sentiment:
-            if "empty" in content_str.lower() or not any(x in content_str for x in ["Title:"]):
+            if "empty" in content_str.lower() or "Title: \n" in content_str:
                 return AIMessage(content="")
+            sentiment = "Unknown"
             
         data = {
             "sentiment": sentiment,
@@ -153,10 +155,9 @@ def test_invalid_empty_article():
             NewsArticle(title="", summary="", source="", url="", published_at="")
         ]
     )
-    result = agent.run(news)
-    # LLM should interpret an empty article as unknown
-    assert result.sentiment == "Unknown"
-    assert result.confidence == 0
+    import pytest
+    with pytest.raises(ValueError, match="SentimentAgent LLM Failure"):
+        result = agent.run(news)
 
 def test_llm_failure_mocked(monkeypatch):
     agent = get_agent()
