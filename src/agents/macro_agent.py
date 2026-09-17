@@ -15,7 +15,7 @@ from src.tools.macro.inflation import get_inflation_data
 from src.tools.macro.rbi import get_rbi_updates
 from src.tools.macro.us_market import get_us_market_summary
 from src.tools.macro.usd_inr import get_usd_inr_rate
-
+from src.tools.tavily.macro_news import search_macro_news_tavily
 
 TOOLS = [
     get_fii_dii_flows,
@@ -25,6 +25,7 @@ TOOLS = [
     get_inflation_data,
     get_gold_price,
     get_rbi_updates,
+    search_macro_news_tavily,
 ]
 
 

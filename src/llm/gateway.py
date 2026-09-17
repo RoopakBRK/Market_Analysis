@@ -11,6 +11,9 @@ from langchain_core.messages import AIMessage
 llm_usage_stats = {
     "MacroAgent": 0,
     "CompanyNewsAgent": 0,
+    "MarketDataAgent": 0,
+    "FinancialDataAgent": 0,
+    "RedditSentimentAgent": 0,
     "SentimentAgent": 0,
     "ReportAgent": 0,
     "Unknown": 0

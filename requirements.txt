@@ -27,4 +27,5 @@ prometheus-client
 pyright
 langchain-groq
 datetime
-
+tavily-python
+praw

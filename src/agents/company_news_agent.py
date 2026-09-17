@@ -1,14 +1,9 @@
-import json
-import ast
-from typing import TypedDict, Annotated, Any
-from langchain_core.messages import SystemMessage, HumanMessage, AnyMessage
-from langgraph.graph.message import add_messages
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from langchain_core.messages import ToolMessage
 from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import ToolNode, tools_condition
 
-from src.llm.gateway import get_llm
 from src.models.company import CompanyNews, NewsArticle
-from src.prompts.company import SYSTEM_PROMPT
+from src.graph.messages_state import AgentMessagesState
 
 from src.tools.company.economic_times import search_economic_times_news
 from src.tools.company.investor_relations import get_investor_relations
@@ -16,7 +11,9 @@ from src.tools.company.mint import search_mint_news
 from src.tools.company.moneycontrol import search_moneycontrol_news
 from src.tools.company.nse import get_nse_announcements
 from src.tools.company.reuters import search_reuters_news
-
+from src.tools.tavily.company_news import search_company_news_tavily
+from src.tools.common.normalization import deduplicate_article_dicts
+from src.tools.common.source_classifier import classify_source
 
 TOOLS = [
     search_reuters_news,
@@ -25,70 +22,55 @@ TOOLS = [
     search_economic_times_news,
     get_nse_announcements,
     get_investor_relations,
+    search_company_news_tavily,
 ]
-
-
-class CompanyNewsState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    final_result: CompanyNews | None
-    company_input: str
 
 
 class CompanyNewsAgent:
     def __init__(self):
-        self.llm = get_llm(agent_name="CompanyNewsAgent").bind_tools(TOOLS)
-        
-        # Tool Node
-        self.tool_node = ToolNode(TOOLS)
-        
-        # Graph Builder
-        builder = StateGraph(CompanyNewsState)
-        
-        builder.add_node("llm_node", self.call_llm)
-        builder.add_node("tools_node", self.tool_node)
+        builder = StateGraph(AgentMessagesState)
+
+        builder.add_node("collect_data_node", self.collect_data)
         builder.add_node("merge_node", self.merge_output)
-        
-        builder.add_edge(START, "llm_node")
-        
-        builder.add_conditional_edges(
-            "llm_node",
-            tools_condition,
-            {
-                "tools": "tools_node",
-                "__end__": "merge_node",
-            },
-        )
-        
-        builder.add_edge("tools_node", "llm_node")
+
+        builder.add_edge(START, "collect_data_node")
+        builder.add_edge("collect_data_node", "merge_node")
         builder.add_edge("merge_node", END)
-        
+
         self.graph = builder.compile()
 
-    def call_llm(self, state: CompanyNewsState):
-        messages = state["messages"]
-        response = self.llm.invoke(messages)
-        return {"messages": [response]}
-
-    def normalize_url(self, url: str) -> str:
-        import urllib.parse
-        if not url: return ""
-        parsed = urllib.parse.urlparse(url)
-        # Remove tracking parameters
-        query = urllib.parse.parse_qs(parsed.query)
-        query = {k: v for k, v in query.items() if not k.startswith("utm_")}
-        new_query = urllib.parse.urlencode(query, doseq=True)
-        # Reconstruct URL without fragment
-        clean_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip('/'), parsed.params, new_query, ''))
-        return clean_url
-
-    def normalize_title(self, title: str) -> str:
-        import re
-        if not title: return ""
-        # Lowercase and remove all non-alphanumeric characters
-        return re.sub(r'[^a-z0-9]', '', title.lower())
+    def collect_data(self, state: AgentMessagesState):
+        """Deterministically collect data from all news tools without an LLM."""
+        company = state.get("company_input", "")
+        tool_results = []
+        
+        def run_tool(tool):
+            try:
+                # Call tool directly using its underlying function
+                if "company" in tool.args:
+                    result = tool.invoke({"company": company})
+                else:
+                    result = tool.invoke({})
+                return tool.name, result
+            except Exception as e:
+                return tool.name, {"error": str(e), "company": company, "articles": []}
+                
+        with ThreadPoolExecutor(max_workers=len(TOOLS)) as executor:
+            futures = [executor.submit(run_tool, t) for t in TOOLS]
+            for future in as_completed(futures):
+                name, result = future.result()
+                tool_results.append(
+                    ToolMessage(
+                        content=str(result),
+                        name=name,
+                        tool_call_id=f"deterministic_{name}"
+                    )
+                )
+                
+        return {"messages": tool_results}
 
     def score_article(self, article: NewsArticle) -> int:
-        score = 0
+        score = article.relevance_score
         text = f"{article.title or ''} {article.summary or ''}".lower()
         
         # Relevance Scoring
@@ -103,56 +85,35 @@ class CompanyNewsAgent:
         elif any(w in text for w in ["contract", "deal", "partnership", "regulatory"]):
             score += 8
         elif any(w in text for w in ["market", "nifty", "sensex", "stocks in news"]):
-            # Generic market articles get penalized unless they specifically mention company earnings
             score -= 5
         else:
-            score += 1 # generic company mention
+            score += 1 
             
-        # Source Scoring
-        source = article.source or ""
-        if source in ["NSE", "Investor Relations"]:
+        # Source Scoring based on tier
+        if article.source_type == "official":
             score += 10
-        elif source == "Reuters":
+        elif article.source_type == "tier1":
             score += 9
-        elif source == "Economic Times":
-            score += 8
-        elif source in ["Moneycontrol", "Mint"]:
+        elif article.source_type == "tier2":
             score += 7
             
         return score
 
     def rank_and_filter_articles(self, articles: list[NewsArticle], top_n: int = 10, max_per_source: int = 5) -> list[NewsArticle]:
-        seen_urls = set()
-        seen_titles = set()
-        deduped = []
-        
-        # Deduplication
+        # Deduplication happens at dict level in merge_output, here we just rank and limit
+        # Store original article with its score dynamically attached for sorting
         for a in articles:
-            norm_url = self.normalize_url(a.url)
-            norm_title = self.normalize_title(a.title)
-            
-            if norm_url and norm_url in seen_urls:
-                continue
-            if norm_title and norm_title in seen_titles:
-                continue
-                
-            if norm_url: seen_urls.add(norm_url)
-            if norm_title: seen_titles.add(norm_title)
-            
-            # Store original article with its score dynamically attached for sorting
-            a._score = self.score_article(a)
-            deduped.append(a)
+            a.relevance_score = self.score_article(a)
             
         # Sort by score descending
-        deduped.sort(key=lambda x: getattr(x, '_score', 0), reverse=True)
+        articles.sort(key=lambda x: x.relevance_score, reverse=True)
         
-        # Filter and enforce diversity
         final_articles = []
         source_counts = {}
         
-        for a in deduped:
-            if getattr(a, '_score', 0) < 0:
-                continue # Skip terrible articles
+        for a in articles:
+            if a.relevance_score < 0:
+                continue 
                 
             source = a.source or "Unknown"
             count = source_counts.get(source, 0)
@@ -160,7 +121,6 @@ class CompanyNewsAgent:
                 continue
                 
             source_counts[source] = count + 1
-            # Clean up the dynamic attribute before Pydantic validation later
             final_articles.append(a)
             
             if len(final_articles) >= top_n:
@@ -168,7 +128,9 @@ class CompanyNewsAgent:
                 
         return final_articles
 
-    def merge_output(self, state: CompanyNewsState):
+    def merge_output(self, state: AgentMessagesState):
+        import json
+        import ast
         company = state.get("company_input", "")
         company_name = company
         
@@ -200,23 +162,27 @@ class CompanyNewsAgent:
                 if isinstance(articles, list):
                     for a in articles:
                         if isinstance(a, dict):
+                            # Make sure source_type is populated properly
+                            if "source_type" not in a or not a["source_type"]:
+                                a["source_type"] = classify_source(a.get("source", ""))
+                            if a["source_type"] == "tavily" and "underlying_source_type" in a:
+                                a["source_type"] = a["underlying_source_type"]
+                            a["is_official"] = (a["source_type"] == "official")
                             all_articles_data.append(a)
         
+        # Deduplicate deterministically by URL / Title+Source
+        deduped_dicts = deduplicate_article_dicts(all_articles_data)
+
         # Convert dictionary to Pydantic NewsArticle
         news_articles = []
-        for a_data in all_articles_data:
+        for a_data in deduped_dicts:
             try:
                 news_articles.append(NewsArticle.model_validate(a_data))
             except Exception:
                 continue
                 
-        # Rank, filter and deduplicate
-        final_articles = self.rank_and_filter_articles(news_articles, top_n=5, max_per_source=5)
-        
-        # Clean up dynamic _score attribute before returning to avoid Pydantic issues
-        for a in final_articles:
-            if hasattr(a, '_score'):
-                delattr(a, '_score')
+        # Rank and filter
+        final_articles = self.rank_and_filter_articles(news_articles, top_n=8, max_per_source=3)
         
         result = CompanyNews(
             ticker=company,
@@ -227,15 +193,9 @@ class CompanyNewsAgent:
         
         return {"final_result": result}
 
-
     def run(self, company: str) -> CompanyNews:
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Fetch the latest news and announcements for {company}")
-        ]
-        
-        initial_state: CompanyNewsState = {
-            "messages": messages,
+        initial_state: AgentMessagesState = {
+            "messages": [],
             "final_result": None,
             "company_input": company
         }
