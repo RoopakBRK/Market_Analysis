@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 class NewsArticle(BaseModel):
     """
-    Represents a single news article or filing.
+    Represents a single news article or filing...
     """
 
     title: str
