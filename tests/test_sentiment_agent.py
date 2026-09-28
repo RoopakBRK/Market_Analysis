@@ -126,7 +126,7 @@ def test_no_articles():
     assert result.sentiment == "Unknown"
     assert result.confidence == 0
     assert result.articles_analyzed == 0
-    assert result.summary == "No valid news articles found for this company."
+    assert result.summary == "No valid news, financial data, or reddit signals found for this company."
 
 def test_duplicate_articles_handled_by_news_agent():
     # Since duplicates are handled in CompanyNewsAgent, the SentimentAgent just processes what it gets.

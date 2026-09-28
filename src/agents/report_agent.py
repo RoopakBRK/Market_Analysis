@@ -3,6 +3,7 @@ import json
 from pydantic import ValidationError
 
 from src.llm.gateway import get_llm
+from src.llm.structured_output import build_json_instruction, unwrap_schema_echo
 from src.models.report import DailyMarketReport
 from src.prompts.report import SYSTEM_PROMPT
 
@@ -11,15 +12,7 @@ class ReportAgent:
     def __init__(self):
         self.llm = get_llm(agent_name="ReportAgent")
 
-        schema = DailyMarketReport.model_json_schema()
-        schema_str = json.dumps(schema, separators=(",", ":")).replace("{", "{{").replace("}", "}}")
-        json_instruction = f"""
-Return ONLY valid JSON.
-Do NOT wrap JSON inside markdown.
-Do NOT explain.
-Do NOT add extra text.
-The JSON must strictly match this schema:
-{schema_str}"""
+        json_instruction = build_json_instruction(DailyMarketReport)
 
         self.prompt = ChatPromptTemplate.from_messages(
             [
@@ -83,13 +76,16 @@ Company News Summaries:
                 content = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0].strip()
-            else:
-                start = content.find('{')
-                end = content.rfind('}')
-                if start != -1 and end != -1:
-                    content = content[start:end+1]
-                    
-            data = json.loads(content)
+
+            # raw_decode from the first '{' instead of find('{')/rfind('}'):
+            # rfind grabs the LAST closing brace in the response, so any
+            # trailing text after a valid object corrupts the slice.
+            start = content.find('{')
+            if start == -1:
+                raise ValueError("No JSON object found in response.")
+            data, _end = json.JSONDecoder().raw_decode(content, start)
+            data = unwrap_schema_echo(data)
+
             # Inject generated_at and date if missing
             from src.tools.common.normalization import utc_now_iso
             import datetime

@@ -73,6 +73,10 @@ class LLMGateway:
             model_provider="groq",
             api_key=settings.GROQ_API_KEY,
             temperature=0,
+            # ReportAgent/MacroAgent emit large structured JSON (per-ticker
+            # breakdowns); the provider default cap truncates mid-string on
+            # larger watchlists, which then fails JSON parsing downstream.
+            max_tokens=settings.LLM_MAX_TOKENS,
         )
 
         self.fallback_llm = init_chat_model(
@@ -80,6 +84,7 @@ class LLMGateway:
             model_provider="groq",
             api_key=settings.GROQ_FALLBACK_API_KEY,
             temperature=0,
+            max_tokens=settings.LLM_MAX_TOKENS,
         )
 
     def get_llm(self, agent_name: str = "Unknown"):

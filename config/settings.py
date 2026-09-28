@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     PRIMARY_MODEL: str = "openai/gpt-oss-20b"
     FALLBACK_MODEL: str = "openai/gpt-oss-20b"
 
+    # Output token cap for all LLM calls. The ReportAgent's JSON payload grows
+    # with watchlist size and can exceed provider defaults, truncating the
+    # response mid-string and breaking JSON parsing. Override via env if needed.
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "8000"))
+
     # ── App metadata ─────────────────────────────────────────────────────────
     APP_NAME: str = "market-analysis"
     ENVIRONMENT: str = "development"

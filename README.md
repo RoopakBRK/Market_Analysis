@@ -108,15 +108,31 @@ python -c "from src.storage.postgres import init_db; init_db()"
 
 ## Running the Pipeline
 
+Run it either as a script or as a module — both work from the repository root:
+
 ```bash
 python apps/worker/run_pipeline.py
+# or
+python -m apps.worker.run_pipeline
 ```
 
 The pipeline will:
 - Collect macro + company intelligence in parallel
 - Synthesise sentiment per company
 - Print the full daily report to stdout
+- Write a formatted PDF report to `reports/market_report_<date>.pdf`
 - Persist results to PostgreSQL (if `DATABASE_URL` is set)
+
+A single run takes a few minutes (data collection is paced with short
+delays between companies, plus real LLM calls for sentiment + report
+synthesis).
+
+### Reddit is optional
+
+If `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` are left blank in `.env`,
+the pipeline logs `[Reddit] Skipped — REDDIT_CLIENT_ID/SECRET not
+configured.` and continues normally — Reddit sentiment is simply reported
+as `Unknown` for that run. No crash, no manual flag needed.
 
 ---
 
@@ -127,6 +143,33 @@ pytest tests/ -v --tb=short
 ```
 
 > Tests do **not** require live API keys — all external calls are mocked.
+
+---
+
+## Quick Reference — Terminal Commands
+
+```bash
+# 1. Activate the virtual environment (from the repo root)
+source .venv/bin/activate        # macOS / Linux
+# .venv\Scripts\activate         # Windows
+
+# 2. Install / update dependencies
+pip install -r requirements.txt
+
+# 3. Run the full pipeline (prints report to stdout + writes a PDF to reports/)
+python apps/worker/run_pipeline.py
+
+# 4. Run the test suite
+pytest tests/ -v --tb=short
+
+# 5. Open the most recently generated PDF report
+open reports/market_report_$(date +%Y-%m-%d).pdf     # macOS
+# xdg-open reports/market_report_$(date +%Y-%m-%d).pdf  # Linux
+# start reports\market_report_%date%.pdf                # Windows
+
+# 6. (Optional) Initialise the PostgreSQL schema
+python -c "from src.storage.postgres import init_db; init_db()"
+```
 
 ---
 

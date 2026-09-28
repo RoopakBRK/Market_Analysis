@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from src.models.common import ConfidenceScore, StringList
+
 
 class MacroSummary(BaseModel):
     """
@@ -14,7 +16,7 @@ class MacroSummary(BaseModel):
         "Neutral",
     ]
 
-    confidence: int = Field(
+    confidence: ConfidenceScore = Field(
         ge=0,
         le=100,
         description="Overall confidence score (0-100).",
@@ -24,11 +26,11 @@ class MacroSummary(BaseModel):
         description="Concise summary of the macro environment."
     )
 
-    key_drivers: list[str] = Field(
+    key_drivers: StringList = Field(
         description="Primary reasons behind the macro sentiment."
     )
 
-    market_events: list[str] = Field(
+    market_events: StringList = Field(
         default_factory=list,
         description="Important market events to watch today.",
     )

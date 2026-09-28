@@ -23,9 +23,12 @@ def macro_node(state):
         print(f"[Graph Warning] MacroAgent failed: {e}")
         from src.models.macro import MacroSummary
         macro_summary = MacroSummary(
-            overall_sentiment="Unknown",
+            # "Unknown" is not a valid MacroSummary.overall_sentiment literal
+            # (only Bullish/Bearish/Neutral) — using it here would crash this
+            # fallback itself and mask the original exception.
+            overall_sentiment="Neutral",
             confidence=0,
-            summary="Macro agent failed to run.",
+            summary=f"Macro agent failed to run: {e}",
             key_drivers=[],
             market_events=[],
             last_updated="Unknown",
@@ -133,11 +136,25 @@ def report_node(state):
         from src.models.macro import MacroSummary
         from src.tools.common.normalization import utc_now_iso
         import datetime
+        # Prefer the real MacroSummary already collected upstream; only
+        # fall back to a placeholder if macro collection itself failed too.
+        fallback_macro = state.get("macro_summary") or MacroSummary(
+            # "Unknown" is not a valid overall_sentiment literal on
+            # MacroSummary (only Bullish/Bearish/Neutral) — using it here
+            # would crash this fallback itself and hide the real error.
+            overall_sentiment="Neutral",
+            confidence=0,
+            summary="Report generation failed.",
+            key_drivers=[],
+            market_events=[],
+            last_updated="Unknown",
+            market_data={},
+        )
         report = DailyMarketReport(
             date=datetime.date.today().isoformat(),
             overall_market_sentiment="Unknown",
             overall_confidence=0,
-            macro_summary=MacroSummary(overall_sentiment="Unknown", confidence=0, summary="Report generation failed.", key_drivers=[], market_events=[], last_updated="Unknown", market_data={}),
+            macro_summary=fallback_macro,
             generated_at=utc_now_iso()
         )
     return {"report": report}

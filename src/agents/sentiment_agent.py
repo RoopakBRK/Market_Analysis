@@ -3,6 +3,7 @@ import json
 from pydantic import ValidationError
 
 from src.llm.gateway import get_llm
+from src.llm.structured_output import build_json_instruction, unwrap_schema_echo
 from src.models.sentiment import SentimentResult
 from src.models.reddit import RedditSignal
 from src.models.financial_data import CompanyFinancials
@@ -12,7 +13,6 @@ from src.prompts.sentiment import SYSTEM_PROMPT
 class SentimentAgent:
     def __init__(self):
         self.llm = get_llm(agent_name="SentimentAgent")
-        self.schema = SentimentResult.model_json_schema()
 
     def run(
         self,
@@ -83,14 +83,7 @@ class SentimentAgent:
         else:
             input_text += "No Reddit community signals available.\n"
 
-        schema_str = json.dumps(self.schema.get("properties", self.schema), separators=(",", ":")).replace("{", "{{").replace("}", "}}")
-        
-        json_instruction = f"""
-Return ONLY valid JSON representing the object itself (NOT a JSON schema).
-Do NOT wrap JSON inside markdown blocks.
-Do NOT explain or add extra text.
-The JSON must strictly contain these keys and types:
-{schema_str}"""
+        json_instruction = build_json_instruction(SentimentResult)
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -112,23 +105,28 @@ The JSON must strictly contain these keys and types:
                 f"Prompt length: {len(msgs_list[0].content) + len(msgs_list[1].content)} chars."
             )
 
-        # 4. Defensive JSON parsing
-        json_content = content
-        import re
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if match:
-            json_content = match.group(0)
-
+        # 4. Defensive JSON parsing.
+        # Use raw_decode from the first '{' instead of a greedy `\{.*\}` regex:
+        # the greedy regex spans to the LAST '}' in the response, so any
+        # trailing text after a valid object (or a second, malformed object)
+        # gets pulled in and breaks parsing. raw_decode stops as soon as the
+        # first complete JSON value ends.
+        start = content.find("{")
+        if start == -1:
+            raise ValueError(
+                f"Failed to parse JSON from SentimentAgent LLM.\n"
+                f"No JSON object found in response.\nResponse content:\n{content}"
+            )
         try:
-            data = json.loads(json_content)
-            if "properties" in data and "sentiment" in data["properties"]:
-                data = data["properties"]
+            data, _end = json.JSONDecoder().raw_decode(content, start)
         except json.JSONDecodeError as e:
             raise ValueError(
                 f"Failed to parse JSON from SentimentAgent LLM.\n"
                 f"Error: {e}\n"
                 f"Response content:\n{content}"
             ) from e
+
+        data = unwrap_schema_echo(data)
 
         # Ensure ticker and company name matches the context
         data["ticker"] = ticker

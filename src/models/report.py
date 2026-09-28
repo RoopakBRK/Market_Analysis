@@ -1,6 +1,7 @@
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from src.models.common import ConfidenceScore, StringList
 from src.models.macro import MacroSummary
 from src.models.sentiment import SentimentResult
 
@@ -15,14 +16,14 @@ class CompanyIntelligence(BaseModel):
 
     # Overall sentiment label for this company.
     sentiment: str
-    confidence: int = Field(ge=0, le=100)
+    confidence: ConfidenceScore = Field(ge=0, le=100)
 
     # Key signals broken out by source type.
-    key_positive_signals: list[str] = Field(default_factory=list)
-    key_negative_signals: list[str] = Field(default_factory=list)
+    key_positive_signals: StringList = Field(default_factory=list)
+    key_negative_signals: StringList = Field(default_factory=list)
 
     # News headlines / top articles relevant to today.
-    important_news: list[str] = Field(default_factory=list)
+    important_news: StringList = Field(default_factory=list)
 
     # Relevant financial context (PE, events, etc.) from FinancialDataAgent.
     financial_context: Optional[str] = None
@@ -46,7 +47,7 @@ class DailyMarketReport(BaseModel):
 
     overall_market_sentiment: str
 
-    overall_confidence: int = Field(ge=0, le=100)
+    overall_confidence: ConfidenceScore = Field(ge=0, le=100)
 
     # Full MacroSummary object for downstream use / serialisation.
     macro_summary: MacroSummary
@@ -55,7 +56,7 @@ class DailyMarketReport(BaseModel):
     macro_overview: str = ""
 
     # Primary macro drivers (FII/DII, crude, USD/INR, US markets, etc.).
-    key_macro_drivers: list[str] = Field(default_factory=list)
+    key_macro_drivers: StringList = Field(default_factory=list)
 
     # Per-company intelligence sections.
     company_intelligence: list[CompanyIntelligence] = Field(default_factory=list)
@@ -65,11 +66,11 @@ class DailyMarketReport(BaseModel):
     top_negative_stocks: list[SentimentResult] = Field(default_factory=list)
 
     # Important market events (earnings, RBI, government actions, etc.).
-    market_events: list[str] = Field(default_factory=list)
+    market_events: StringList = Field(default_factory=list)
 
     # Synthesised final market view and risk/catalyst assessment.
     final_market_view: str = ""
-    major_catalysts: list[str] = Field(default_factory=list)
-    major_risks: list[str] = Field(default_factory=list)
+    major_catalysts: StringList = Field(default_factory=list)
+    major_risks: StringList = Field(default_factory=list)
 
     generated_at: str
