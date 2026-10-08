@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     # response mid-string and breaking JSON parsing. Override via env if needed.
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "8000"))
 
+    # ── Anthropic (last-resort LLM fallback) ─────────────────────────────────
+    # Used only when both Groq models fail, e.g. the Groq quota has run out.
+    # Leave the key blank to run on Groq alone.
+    ANTHROPIC_FALLBACK_API_KEY: str = os.getenv("ANTHROPIC_FALLBACK_API_KEY", "")
+    # A current-generation Claude model id, e.g. claude-opus-5-5 (most
+    # capable), claude-sonnet-5-5 or claude-haiku-5-5 (cheapest).
+    ANTHROPIC_FALLBACK_MODEL: str = os.getenv("ANTHROPIC_FALLBACK_MODEL", "claude-opus-5-5")
+    # Covers Claude's thinking as well as its answer, hence higher than LLM_MAX_TOKENS.
+    ANTHROPIC_MAX_TOKENS: int = int(os.getenv("ANTHROPIC_MAX_TOKENS", "16000"))
+
     # ── App metadata ─────────────────────────────────────────────────────────
     APP_NAME: str = "market-analysis"
     ENVIRONMENT: str = "development"

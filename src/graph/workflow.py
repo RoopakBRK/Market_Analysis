@@ -11,6 +11,7 @@ from src.graph.nodes import (
     historical_context_node,
     sentiment_node,
     report_node,
+    fact_check_node,
 )
 
 
@@ -27,6 +28,7 @@ builder.add_node("reddit_sentiment_agent", reddit_sentiment_node)
 builder.add_node("historical_context_agent", historical_context_node)
 builder.add_node("sentiment_agent", sentiment_node)
 builder.add_node("report_agent", report_node)
+builder.add_node("fact_check_agent", fact_check_node)
 
 
 # -----------------------------
@@ -51,7 +53,10 @@ builder.add_edge("market_data_agent", "historical_context_agent")
 
 # Generate report once both sentiment and historical context are ready
 builder.add_edge(["sentiment_agent", "historical_context_agent"], "report_agent")
-builder.add_edge("report_agent", END)
+
+# Check the commentary against the facts before the report is final
+builder.add_edge("report_agent", "fact_check_agent")
+builder.add_edge("fact_check_agent", END)
 
 
 graph = builder.compile()

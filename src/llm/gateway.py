@@ -4,8 +4,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from config.settings import settings
 
 
+import sys
 import time
 import random
+from dataclasses import dataclass
 
 llm_usage_stats = {
     "MacroAgent": 0,
@@ -15,6 +17,7 @@ llm_usage_stats = {
     "RedditSentimentAgent": 0,
     "SentimentAgent": 0,
     "ReportAgent": 0,
+    "FactCheckAgent": 0,
     "Unknown": 0
 }
 
@@ -29,10 +32,34 @@ def print_usage_stats():
     print("-" * 27)
     print(f"{'Total:':<20} {total} calls\n")
 
+
+# After a model fails, it is skipped for this long. When a provider is out of
+# quota, every call would otherwise sit through that model's retries and
+# backoff again before reaching the next one.
+_COOLDOWN_SECONDS = 60
+
+
+@dataclass
+class _Model:
+    """One model in a fallback chain, with when it may next be tried."""
+    name: str
+    llm: object
+    unavailable_until: float = 0.0
+
+
+def _as_model(llm) -> _Model:
+    if isinstance(llm, _Model):
+        return llm
+    return _Model(name=getattr(llm, "model", None) or type(llm).__name__, llm=llm)
+
+
 class RateLimitedLLM:
     """
-    Wraps a chat model with usage counting, rate-limit retries and an
-    optional fallback model.
+    Wraps a chain of chat models — the model to use, then its fallbacks in
+    order — with usage counting and rate-limit retries.
+
+    Each call goes to the first model that is not cooling down after a recent
+    failure. If it fails the next one is tried, and so on.
 
     Failures are raised, not swallowed: callers (the graph nodes) already
     catch exceptions and substitute a placeholder result, and need the real
@@ -40,10 +67,10 @@ class RateLimitedLLM:
     look like "the model returned an empty response".
     """
 
-    def __init__(self, llm, agent_name: str, fallback_llm=None):
+    def __init__(self, llm, agent_name: str, *fallback_llms):
         self.llm = llm
         self.agent_name = agent_name
-        self.fallback_llm = fallback_llm
+        self.models = [_as_model(m) for m in (llm, *fallback_llms) if m is not None]
 
     def _invoke_with_retry(self, llm, *args, **kwargs):
         max_retries = 3
@@ -60,33 +87,56 @@ class RateLimitedLLM:
                 print(f"\n[{self.agent_name}] Rate limit hit. Retrying in {sleep_time:.1f}s...")
                 time.sleep(sleep_time)
 
+    def _call(self, model: _Model, *args, **kwargs):
+        # A client that retries by itself is called once; retrying it again
+        # here would multiply the waiting.
+        if getattr(model.llm, "retries_itself", False):
+            return model.llm.invoke(*args, **kwargs)
+        return self._invoke_with_retry(model.llm, *args, **kwargs)
+
     def invoke(self, *args, **kwargs):
         global llm_usage_stats
-        llm_usage_stats[self.agent_name] = llm_usage_stats.get(self.agent_name, 0) + 1
 
-        try:
-            return self._invoke_with_retry(self.llm, *args, **kwargs)
-        except Exception as e:
-            if self.fallback_llm is None:
-                raise
-            print(f"\n[{self.agent_name}] Primary LLM failed ({type(e).__name__}: {e}). Trying fallback model...")
+        now = time.monotonic()
+        # If every model is cooling down, try them all rather than fail outright.
+        candidates = [m for m in self.models if m.unavailable_until <= now] or self.models
 
-        llm_usage_stats[self.agent_name] += 1
-        return self._invoke_with_retry(self.fallback_llm, *args, **kwargs)
+        last_error = None
+        for position, model in enumerate(candidates):
+            llm_usage_stats[self.agent_name] = llm_usage_stats.get(self.agent_name, 0) + 1
+            try:
+                return self._call(model, *args, **kwargs)
+            except Exception as e:
+                last_error = e
+                model.unavailable_until = time.monotonic() + _COOLDOWN_SECONDS
+                if position + 1 < len(candidates):
+                    print(
+                        f"\n[{self.agent_name}] {model.name} failed "
+                        f"({type(e).__name__}: {str(e)[:200]}). Trying {candidates[position + 1].name}..."
+                    )
+        raise last_error
 
     def bind_tools(self, *args, **kwargs):
-        # Wrap the bound LLM so it continues to track usage and retry
-        bound_llm = self.llm.bind_tools(*args, **kwargs)
-        bound_fallback = self.fallback_llm.bind_tools(*args, **kwargs) if self.fallback_llm else None
-        return RateLimitedLLM(bound_llm, self.agent_name, bound_fallback)
+        # Wrap the bound LLMs so they continue to track usage and retry.
+        # Models without tool binding (the Anthropic adapter) drop out of the chain.
+        bound = [
+            _Model(name=m.name, llm=m.llm.bind_tools(*args, **kwargs))
+            for m in self.models if hasattr(m.llm, "bind_tools")
+        ]
+        return RateLimitedLLM(bound[0], self.agent_name, *bound[1:])
 
 class LLMGateway:
     """
     Centralized LLM Gateway.
+
+    Fallback order for ordinary calls:
+      1. Groq primary model
+      2. Groq fallback model (a different model, on its own API key)
+      3. Claude, via ANTHROPIC_FALLBACK_API_KEY — only if that key is set
     """
 
     def __init__(self):
-        self.primary_llm = init_chat_model(
+        self.primary_llm = _Model(settings.PRIMARY_MODEL, init_chat_model(
             model=settings.PRIMARY_MODEL,
             model_provider="groq",
             api_key=settings.GROQ_API_KEY,
@@ -95,21 +145,48 @@ class LLMGateway:
             # breakdowns); the provider default cap truncates mid-string on
             # larger watchlists, which then fails JSON parsing downstream.
             max_tokens=settings.LLM_MAX_TOKENS,
-        )
+        ))
 
-        self.fallback_llm = init_chat_model(
+        self.fallback_llm = _Model(settings.FALLBACK_MODEL, init_chat_model(
             model=settings.FALLBACK_MODEL,
             model_provider="groq",
             api_key=settings.GROQ_FALLBACK_API_KEY,
             temperature=0,
             max_tokens=settings.LLM_MAX_TOKENS,
-        )
+        ))
+
+        self.anthropic_llm = self._build_anthropic_fallback()
+
+    @staticmethod
+    def _build_anthropic_fallback() -> _Model | None:
+        """Claude as the last resort when both Groq models fail; None if no key is set."""
+        if not settings.ANTHROPIC_FALLBACK_API_KEY:
+            return None
+        try:
+            from src.llm.anthropic_fallback import AnthropicFallbackLLM
+        except ImportError:
+            print("[LLM] anthropic not installed; the Claude fallback is off. Install with: pip install anthropic", file=sys.stderr)
+            return None
+
+        return _Model(settings.ANTHROPIC_FALLBACK_MODEL, AnthropicFallbackLLM(
+            api_key=settings.ANTHROPIC_FALLBACK_API_KEY,
+            model=settings.ANTHROPIC_FALLBACK_MODEL,
+            max_tokens=settings.ANTHROPIC_MAX_TOKENS,
+        ))
 
     def get_llm(self, agent_name: str = "Unknown"):
-        return RateLimitedLLM(self.primary_llm, agent_name, fallback_llm=self.fallback_llm)
+        return RateLimitedLLM(self.primary_llm, agent_name, self.fallback_llm, self.anthropic_llm)
 
     def get_fallback_llm(self, agent_name: str = "Unknown"):
-        return RateLimitedLLM(self.fallback_llm, agent_name)
+        return RateLimitedLLM(self.fallback_llm, agent_name, self.anthropic_llm)
+
+    def get_checker_llm(self, agent_name: str = "Unknown"):
+        """
+        An LLM for reviewing another agent's output. The two Groq models swap
+        roles (the fallback model leads, backed by the primary) so that the
+        review is made by a different model from the one that wrote the text.
+        """
+        return RateLimitedLLM(self.fallback_llm, agent_name, self.primary_llm, self.anthropic_llm)
 
 
 gateway = LLMGateway()
@@ -119,3 +196,6 @@ def get_llm(agent_name: str = "Unknown"):
 
 def get_fallback_llm(agent_name: str = "Unknown"):
     return gateway.get_fallback_llm(agent_name)
+
+def get_checker_llm(agent_name: str = "Unknown"):
+    return gateway.get_checker_llm(agent_name)

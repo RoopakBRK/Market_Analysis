@@ -45,6 +45,7 @@ _UNICODE_REPLACEMENTS = {
     "₹": "Rs ",  # rupee sign
     " ": " ",  # non-breaking space
     "•": "-",  # bullet (we render our own bullets via ListFlowable)
+    "\u202f": " ", "\u2009": " ",  # narrow no-break / thin space ("$1.4 billion")
 }
 
 

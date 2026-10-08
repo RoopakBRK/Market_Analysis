@@ -97,6 +97,54 @@ def _find_narrative(
     return None
 
 
+def build_report_facts(
+    macro_summary, company_news, market_data, financial_data, reddit_signals, sentiments,
+    historical_context=None, market_changes=None, run_changes=None, previous_run_date=None,
+) -> str:
+    """
+    Everything the commentary may draw on, as text. The ReportAgent writes
+    from it and the FactCheckAgent checks the result against it, so both
+    must see exactly the same facts.
+    """
+    historical_context = historical_context or {}
+
+    # Exclude massive raw data to save tokens
+    macro_data_clean = macro_summary.model_dump(exclude={"market_data"})
+
+    facts = f"Macro Data:\n{json.dumps(macro_data_clean, indent=2, ensure_ascii=False)}\n"
+
+    if market_changes:
+        facts += "\nMoves since the previous close:\n"
+        facts += "".join(f"- {r.item}: {r.previous} -> {r.current} ({r.change})\n" for r in market_changes)
+    if run_changes:
+        facts += f"\nChanges since the previous run ({previous_run_date}):\n"
+        facts += "".join(f"- {r.item}: {r.previous} -> {r.current} ({r.change})\n" for r in run_changes)
+
+    for ticker, sentiment in sentiments.items():
+        # Only what the commentary needs; the per-source breakdown and
+        # bookkeeping fields would just invite the model to echo them.
+        sentiment_view = sentiment.model_dump(
+            include={"sentiment", "confidence", "impact", "summary", "positive_drivers", "negative_drivers"}
+        )
+        headlines = _headlines(company_news.get(ticker))
+
+        facts += f"\n=== {ticker} ({sentiment.company_name}) ===\n"
+        facts += f"Sentiment analysis:\n{json.dumps(sentiment_view, indent=2, ensure_ascii=False)}\n"
+        facts += "Recent headlines:\n"
+        facts += "".join(f"- {h}\n" for h in headlines) if headlines else "- none retrieved\n"
+        facts += f"Market data: {_format_market(market_data.get(ticker)) or 'unavailable'}\n"
+        facts += f"Financial data: {_format_financials(financial_data.get(ticker)) or 'unavailable'}\n"
+        facts += f"Reddit/community: {_format_reddit(reddit_signals.get(ticker)) or 'unavailable'}\n"
+        passages = historical_context.get(ticker) or []
+        if passages:
+            facts += "Historical context (from 20 years of price history; prices adjusted for splits and dividends):\n"
+            facts += "".join(f"- {passage}\n" for passage in passages)
+
+    # Upstream LLM text uses typographic spaces ("$1.4\u202fbillion"); plain
+    # spaces read the same and keep figures easy to match.
+    return facts.replace("\u202f", " ").replace("\u2009", " ").replace("\u00a0", " ")
+
+
 class ReportAgent:
     def __init__(self):
         self.llm = get_llm(agent_name="ReportAgent")
@@ -192,37 +240,10 @@ class ReportAgent:
         self, macro_summary, company_news, market_data, financial_data, reddit_signals, sentiments,
         historical_context, market_changes, run_changes, previous_run_date,
     ) -> str:
-        # Exclude massive raw data to save tokens
-        macro_data_clean = macro_summary.model_dump(exclude={"market_data"})
-
-        input_text = f"Macro Data:\n{json.dumps(macro_data_clean, indent=2)}\n"
-
-        if market_changes:
-            input_text += "\nMoves since the previous close:\n"
-            input_text += "".join(f"- {r.item}: {r.previous} -> {r.current} ({r.change})\n" for r in market_changes)
-        if run_changes:
-            input_text += f"\nChanges since the previous run ({previous_run_date}):\n"
-            input_text += "".join(f"- {r.item}: {r.previous} -> {r.current} ({r.change})\n" for r in run_changes)
-
-        for ticker, sentiment in sentiments.items():
-            # Only what the commentary needs; the per-source breakdown and
-            # bookkeeping fields would just invite the model to echo them.
-            sentiment_view = sentiment.model_dump(
-                include={"sentiment", "confidence", "impact", "summary", "positive_drivers", "negative_drivers"}
-            )
-            headlines = _headlines(company_news.get(ticker))
-
-            input_text += f"\n=== {ticker} ({sentiment.company_name}) ===\n"
-            input_text += f"Sentiment analysis:\n{json.dumps(sentiment_view, indent=2)}\n"
-            input_text += "Recent headlines:\n"
-            input_text += "".join(f"- {h}\n" for h in headlines) if headlines else "- none retrieved\n"
-            input_text += f"Market data: {_format_market(market_data.get(ticker)) or 'unavailable'}\n"
-            input_text += f"Financial data: {_format_financials(financial_data.get(ticker)) or 'unavailable'}\n"
-            input_text += f"Reddit/community: {_format_reddit(reddit_signals.get(ticker)) or 'unavailable'}\n"
-            passages = historical_context.get(ticker) or []
-            if passages:
-                input_text += "Historical context (from 20 years of price history; prices adjusted for splits and dividends):\n"
-                input_text += "".join(f"- {passage}\n" for passage in passages)
+        input_text = build_report_facts(
+            macro_summary, company_news, market_data, financial_data, reddit_signals, sentiments,
+            historical_context, market_changes, run_changes, previous_run_date,
+        )
 
         # The output example shows a single list entry, and the model will
         # sometimes mirror that literally unless told how many are wanted.

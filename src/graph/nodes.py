@@ -6,7 +6,8 @@ from src.agents.market_data_agent import MarketDataAgent
 from src.agents.financial_data_agent import FinancialDataAgent
 from src.agents.reddit_sentiment_agent import RedditSentimentAgent
 from src.agents.sentiment_agent import SentimentAgent
-from src.agents.report_agent import ReportAgent
+from src.agents.report_agent import ReportAgent, build_report_facts
+from src.agents.fact_check_agent import FactCheckAgent
 from src.agents.historical_context_agent import HistoricalContextAgent
 from src.services.change_detection import ChangeDetectionService
 from src.services.historical_service import load_previous_snapshot
@@ -20,6 +21,7 @@ macro_agent = MacroAgent()
 financial_data_agent = FinancialDataAgent()
 reddit_sentiment_agent = RedditSentimentAgent()
 historical_context_agent = HistoricalContextAgent()
+fact_check_agent = FactCheckAgent()
 change_detection = ChangeDetectionService()
 
 
@@ -190,4 +192,29 @@ def report_node(state):
             macro_summary=fallback_macro,
             generated_at=utc_now_iso()
         )
+    return {"report": report}
+
+
+def fact_check_node(state):
+    report = state.get("report")
+    try:
+        sentiments = state.get("sentiments", {})
+        # The same facts the ReportAgent wrote from.
+        facts = build_report_facts(
+            state.get("macro_summary"),
+            state.get("company_news", {}),
+            state.get("market_data", {}),
+            state.get("financial_data", {}),
+            state.get("reddit_signals", {}),
+            sentiments,
+            historical_context=state.get("historical_context", {}),
+            market_changes=report.market_changes,
+            run_changes=report.run_changes,
+            previous_run_date=report.previous_run_date,
+        )
+        report = fact_check_agent.run(
+            report, facts, fallback_interpretations={t: s.summary for t, s in sentiments.items()}
+        )
+    except Exception as e:
+        print(f"[Graph Warning] FactCheckAgent failed, commentary left unchecked: {e}")
     return {"report": report}

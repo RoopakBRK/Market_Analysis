@@ -43,11 +43,16 @@ START
           │
           ▼
      ReportAgent            → Final daily market intelligence report
+          │
+          ▼
+    FactCheckAgent          → Removes commentary the facts don't support
 ```
 
 The LLM writes only the commentary. Every fact in the report — sentiment
 labels, drivers, headlines, prices, timestamps — is copied in code from the
 agents that collected it, so the model cannot alter a figure by retyping it.
+The commentary is then checked by a second model against those same facts,
+and any sentence they don't support is deleted before the report is final.
 
 The companies covered are set in `src/utils/constants.py` (`WATCHLIST`: NSE
 symbol → company name).
@@ -89,6 +94,11 @@ Edit `.env` and fill in your keys:
 # LLM (Groq)
 GROQ_API_KEY=your_groq_api_key
 GROQ_FALLBACK_API_KEY=your_fallback_key
+
+# Anthropic — last-resort LLM fallback (optional). Used only when both Groq
+# models fail, e.g. the Groq quota has run out.
+ANTHROPIC_FALLBACK_API_KEY=your_anthropic_key
+# ANTHROPIC_FALLBACK_MODEL=claude-opus-5-5   # default; any current Claude model id
 
 # Tavily — web/news retrieval
 TAVILY_API_KEY=your_tavily_key

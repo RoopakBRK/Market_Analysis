@@ -9,11 +9,13 @@ Given a watchlist of stock tickers it spins up a directed acyclic graph of speci
 2. Look up **historical precedent** for each stock in a 20-year price-history store (Qdrant RAG)
 3. Converge into a **SentimentAgent** that synthesises per-ticker sentiment
 4. Produce a single **DailyMarketReport** via the **ReportAgent**, including a **day-over-day comparison**
+5. **Fact-check** the report's commentary against the facts with a second model, removing anything unsupported
 
-The LLM backend is **Groq**. Most agents are **fully deterministic** (zero LLM calls). Only `MacroAgent`,
-`SentimentAgent`, and `ReportAgent` invoke an LLM, and the `ReportAgent` uses it for commentary only:
-every fact in the report (labels, drivers, headlines, prices, timestamps, comparisons, historical
-passages) is attached in code.
+The LLM backend is **Groq**, with **Claude** (Anthropic) as an optional last-resort fallback. Most agents
+are **fully deterministic** (zero LLM calls). Only `MacroAgent`, `SentimentAgent`, `ReportAgent` and
+`FactCheckAgent` invoke an LLM, and the `ReportAgent` uses it for commentary only: every fact in the
+report (labels, drivers, headlines, prices, timestamps, comparisons, historical passages) is attached
+in code.
 
 The watchlist lives in `src/utils/constants.py` (`WATCHLIST`: NSE symbol → company name).
 
@@ -41,6 +43,7 @@ Market Analysis/
 │   │
 │   ├── agents/                      # One class per agent
 │   │   ├── company_news_agent.py
+│   │   ├── fact_check_agent.py           # Removes unsupported commentary from the report
 │   │   ├── financial_data_agent.py
 │   │   ├── historical_context_agent.py   # Retrieves precedents from the RAG store
 │   │   ├── macro_agent.py
@@ -118,6 +121,7 @@ Market Analysis/
 │   │
 │   ├── models/                      # Pydantic output models
 │   │   ├── company.py               # CompanyNews, NewsArticle
+│   │   ├── fact_check.py            # FactCheckResult, UnsupportedClaim
 │   │   ├── financial_data.py        # CompanyFinancials
 │   │   ├── macro.py                 # MacroSummary
 │   │   ├── market.py                # MarketData
@@ -128,6 +132,7 @@ Market Analysis/
 │   │
 │   ├── prompts/                     # System-prompt strings (no logic)
 │   │   ├── company.py
+│   │   ├── fact_check.py            # What the fact-checker may and may not flag
 │   │   ├── history.py               # Price-history Q&A (src/rag/query.py)
 │   │   ├── macro.py
 │   │   ├── market.py
@@ -135,7 +140,8 @@ Market Analysis/
 │   │   └── sentiment.py
 │   │
 │   ├── llm/                         # LLM abstraction layer
-│   │   ├── gateway.py               # LLMGateway, RateLimitedLLM, get_llm()
+│   │   ├── gateway.py               # LLMGateway, RateLimitedLLM, get_llm(), get_checker_llm()
+│   │   ├── anthropic_fallback.py    # Claude adapter (official Anthropic SDK) for the fallback chain
 │   │   └── structured_output.py     # Structured output helpers
 │   │
 │   ├── storage/                     # Persistence layer (PostgreSQL)
@@ -184,6 +190,9 @@ START
              └──────────────────────┬──────────────────────┘
                                     ▼   (both must complete)
                                ReportAgent           ← one LLM call (commentary only)
+                                    │
+                                    ▼
+                              FactCheckAgent         ← one LLM call, on a different model
                                     │
                                    END
 ```
@@ -409,6 +418,37 @@ a facts-only report is still built.
 
 ---
 
+### 9. `FactCheckAgent`
+**File:** `src/agents/fact_check_agent.py`
+
+**What it does:**
+The last step before the report is final. The commentary is the only free text in the report, so it
+is the only place a wrong statement can still enter. This agent gives a second model the **same facts
+the ReportAgent wrote from** (`build_report_facts()` in `report_agent.py`) and the commentary, split
+into numbered sentences, and asks which sentences the facts do not support.
+
+- **What is checked:** the macro overview, each company's macro relevance and interpretation, the final
+  market view (each split into sentences), and every major catalyst and risk.
+- **What gets flagged:** a sentence that contradicts the facts; that states a figure, date, rating,
+  event or indicator not in the facts; or that attributes a fact to the wrong company. Interpretation,
+  hedged reasoning and general economic logic are explicitly not flagged. Risks and catalysts are
+  forward-looking by nature, so one is flagged only for a specific figure, date, rating or past event
+  that the facts contradict or lack, not for naming something that might happen.
+- **What happens to a flagged sentence:** it is **deleted in code**, never rewritten, so the check
+  cannot introduce a new claim. Each removal and its reason is recorded in the report's
+  `removed_claims` (an audit trail; not shown in the PDF) and printed in the run log.
+- **Different model:** the check runs on the Groq *fallback* model (`get_checker_llm()`), not the one
+  that wrote the commentary, so it is less likely to repeat the same misreading.
+- **If a field is emptied:** a company's interpretation falls back to its sentiment summary and the
+  macro overview to the macro summary.
+- **If the check itself fails:** the report is returned unchanged.
+
+**Uses LLM?** ✅ Yes — 1 call (none if the report has no commentary).
+
+**Output model:** `DailyMarketReport` (the same report, with unsupported commentary removed)
+
+---
+
 ## Day-over-Day Comparison ("What Changed")
 
 Every report carries a "What Changed" section with two tables, built entirely in code by
@@ -563,16 +603,35 @@ python -m src.rag.query "best months" --ticker TMPV --no-answer    # passages on
 
 ## LLM Gateway — `src/llm/gateway.py`
 
-All LLM calls across the entire system route through a single `LLMGateway` singleton:
+All LLM calls across the entire system route through a single `LLMGateway` singleton. Every agent
+gets a `RateLimitedLLM`, which wraps an ordered **fallback chain** of models:
 
-- Configures a **primary** and a **fallback** Groq model from `config/settings.py` (different models,
-  each with its own API key)
-- Every agent call is wrapped in `RateLimitedLLM` which:
-  - Tracks per-agent call counts in `llm_usage_stats`
-  - Retries up to **3 times** on 429 / 503 errors with exponential back-off + jitter
-  - Falls back to the fallback model if the primary still fails
-  - **Raises** if both fail; the graph nodes catch the error and substitute a placeholder result
-- Call `print_usage_stats()` at the end of a run to see a per-agent breakdown
+| Order | Model | Key | Notes |
+|---|---|---|---|
+| 1 | Groq primary (`PRIMARY_MODEL`) | `GROQ_API_KEY` | |
+| 2 | Groq fallback (`FALLBACK_MODEL`, a different model) | `GROQ_FALLBACK_API_KEY` | Covers a model outage as well as a rate-limited key |
+| 3 | Claude (`ANTHROPIC_FALLBACK_MODEL`, default `claude-opus-5-5`) | `ANTHROPIC_FALLBACK_API_KEY` | Only in the chain when the key is set; used when both Groq models fail, e.g. the Groq quota has run out |
+
+The `FactCheckAgent` uses `get_checker_llm()`, which swaps the first two (Groq fallback model first)
+so the check is made by a different model from the writer.
+
+For each call, `RateLimitedLLM`:
+
+- Tracks per-agent call counts in `llm_usage_stats`
+- Retries a Groq model up to **3 times** on 429 / 503 errors with exponential back-off + jitter
+- Moves to the next model in the chain if that still fails
+- Puts a failed model on a **60-second cooldown**, so later calls skip straight past it instead of
+  waiting through its retries again
+- **Raises** if every model fails; the graph nodes catch the error and substitute a placeholder result
+
+Call `print_usage_stats()` at the end of a run to see a per-agent breakdown.
+
+**Claude adapter** (`src/llm/anthropic_fallback.py`): the agents call `.invoke()` on LangChain-style
+models, so the adapter exposes the same call and returns an `AIMessage`, while making the request with
+the official `anthropic` SDK. It sends no `temperature` and no `thinking` field (current Claude models
+reject sampling parameters and think adaptively by default), sets `effort` to `medium`, opts into
+Anthropic's server-side refusal fallback, and treats a refusal or a response cut off at `max_tokens`
+as an error rather than an answer. The SDK does its own retrying, so the gateway does not retry it again.
 
 ---
 
@@ -583,6 +642,9 @@ All LLM calls across the entire system route through a single `LLMGateway` singl
 | `GROQ_API_KEY` | Primary Groq API key |
 | `GROQ_FALLBACK_API_KEY` | Fallback Groq API key |
 | `PRIMARY_MODEL` / `FALLBACK_MODEL` | Groq model names |
+| `ANTHROPIC_FALLBACK_API_KEY` | Anthropic API key for the last-resort Claude fallback (optional) |
+| `ANTHROPIC_FALLBACK_MODEL` | Claude model id (default `claude-opus-5-5`) |
+| `ANTHROPIC_MAX_TOKENS` | Output cap for Claude calls, covering thinking and answer (default 16000) |
 | `TAVILY_API_KEY` | Tavily news-search API key |
 | `FINANCIAL_AGENT_API_KEY` + `FINANCIAL_AGENT_BASE_URL` | External financial data provider (stub) |
 | `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` | Reddit PRAW OAuth credentials (optional) |
@@ -590,7 +652,8 @@ All LLM calls across the entire system route through a single `LLMGateway` singl
 | `QDRANT_COLLECTION` | Collection name (default `nifty_price_history`) |
 | `DATABASE_URL` | PostgreSQL connection string (optional) |
 
-Reddit, Qdrant and PostgreSQL are each optional: leave them unset and the pipeline skips that part.
+Reddit, Qdrant, PostgreSQL and the Anthropic fallback are each optional: leave them unset and the
+pipeline skips that part.
 
 ---
 
@@ -606,3 +669,4 @@ Reddit, Qdrant and PostgreSQL are each optional: leave them unset and the pipeli
 | `HistoricalContextAgent` | ❌ | RAG retriever (hybrid + rerank) | `list[str]` per ticker |
 | `SentimentAgent` | ✅ 1 call/ticker | 0 (reasoning only) | `SentimentResult` |
 | `ReportAgent` | ✅ 1 call total | 0 (commentary only) | `DailyMarketReport` |
+| `FactCheckAgent` | ✅ 1 call total | 0 (checks the commentary) | `DailyMarketReport` |

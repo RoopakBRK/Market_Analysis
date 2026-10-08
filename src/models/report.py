@@ -146,4 +146,8 @@ class DailyMarketReport(BaseModel):
     major_catalysts: StringList = Field(default_factory=list)
     major_risks: StringList = Field(default_factory=list)
 
+    # Commentary sentences the FactCheckAgent removed as unsupported, each
+    # with its reason. An audit trail: not shown in the PDF.
+    removed_claims: StringList = Field(default_factory=list)
+
     generated_at: str

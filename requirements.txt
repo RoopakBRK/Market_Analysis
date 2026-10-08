@@ -32,3 +32,4 @@ praw
 yfinance
 qdrant-client
 fastembed
+anthropic
