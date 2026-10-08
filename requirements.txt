@@ -29,3 +29,6 @@ langchain-groq
 datetime
 tavily-python
 praw
+yfinance
+qdrant-client
+fastembed

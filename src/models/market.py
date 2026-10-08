@@ -29,8 +29,13 @@ class MarketData(BaseModel):
 
     macd: float | None = None
 
+    macd_signal: float | None = None
+
     vwap: float | None = None
 
     sector: str | None = None
+
+    # NSE sector index used as the benchmark for sector_performance.
+    sector_index: str | None = None
 
     sector_performance: float | None = None

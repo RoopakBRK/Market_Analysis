@@ -1,3 +1,4 @@
+import pytest
 from src.graph.state import GraphState
 from src.graph.workflow import graph
 
@@ -35,6 +36,11 @@ def main():
             print(f"Articles Analyzed: {sentiment.articles_analyzed}")
         else:
             print("No sentiment generated.")
+
+@pytest.mark.live
+def test_three_companies():
+    main()
+
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,11 @@ def get_crude_price() -> Optional[Dict[str, Any]]:
     if not quote:
         return None
         
-    trend = "Bullish" if quote["change_percent"] > 0 else "Bearish"
+    change = quote["change_percent"]
+    trend = "Rising" if change > 0 else "Falling" if change < 0 else "Flat"
+    # India imports most of its crude, so a higher oil price is a headwind
+    # (import bill, inflation, rupee) and a lower one a tailwind.
+    india_impact = "Negative" if change > 0 else "Positive" if change < 0 else "Neutral"
     
     return {
         "price": round(quote["price"], 2),
@@ -20,5 +24,6 @@ def get_crude_price() -> Optional[Dict[str, Any]]:
         "change_percent": round(quote["change_percent"], 2),
         "unit": "USD/Barrel",
         "trend": trend,
+        "impact_on_india": india_impact,
         "source": "Yahoo Finance",
     }

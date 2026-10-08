@@ -64,7 +64,7 @@ def init_db() -> bool:
     Returns True on success, False if DB is unavailable.
     """
     if engine is None:
-        print("[Storage] Skipping DB init — DATABASE_URL not configured.", file=sys.stderr)
+        print("[Storage] Skipping DB init — no database connection.", file=sys.stderr)
         return False
     try:
         Base.metadata.create_all(bind=engine)

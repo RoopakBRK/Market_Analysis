@@ -1,6 +1,8 @@
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import pytest
+
 from src.agents.company_news_agent import CompanyNewsAgent
 from src.tools.company.economic_times import search_economic_times_news
 from src.tools.company.investor_relations import get_investor_relations
@@ -22,6 +24,7 @@ TOOLS = [
 ]
 
 
+@pytest.mark.live
 def test_tools():
     print("\n" + "=" * 70)
     print("COMPANY NEWS TOOL AUDIT")
@@ -60,7 +63,6 @@ def test_tools():
 
     print(json.dumps(results, indent=2, default=str))
 
-import pytest
 @pytest.fixture
 def raw_results():
     return {

@@ -3,7 +3,7 @@ from src.tools.tavily import client as tavily_client
 
 
 @tool
-def search_macro_news_tavily(query: str) -> dict:
+def search_macro_news_tavily(query: str = "RBI policy inflation rupee FII flows") -> dict:
     """
     Retrieve recent macroeconomic news using Tavily.
 
@@ -14,7 +14,7 @@ def search_macro_news_tavily(query: str) -> dict:
     Returns a dict with 'query' and 'articles' (list of normalised dicts).
     Returns an empty articles list gracefully if Tavily is unavailable.
     """
-    enriched_query = f"{query} India economy market 2025"
+    enriched_query = f"{query} India economy markets"
     results = tavily_client.search(query=enriched_query, max_results=5, days_back=3)
     return {
         "query": query,

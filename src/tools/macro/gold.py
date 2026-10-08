@@ -11,7 +11,8 @@ def get_gold_price() -> Optional[Dict[str, Any]]:
     if not quote:
         return None
         
-    trend = "Bullish" if quote["change_percent"] > 0 else "Bearish"
+    change = quote["change_percent"]
+    trend = "Rising" if change > 0 else "Falling" if change < 0 else "Flat"
     
     return {
         "price": round(quote["price"], 2),

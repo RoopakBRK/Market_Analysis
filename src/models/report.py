@@ -25,6 +25,9 @@ class CompanyIntelligence(BaseModel):
     # News headlines / top articles relevant to today.
     important_news: StringList = Field(default_factory=list)
 
+    # Price, technical indicators and sector move from MarketDataAgent.
+    market_snapshot: Optional[str] = None
+
     # Relevant financial context (PE, events, etc.) from FinancialDataAgent.
     financial_context: Optional[str] = None
 
@@ -34,8 +37,70 @@ class CompanyIntelligence(BaseModel):
     # How today's macro environment affects this company.
     macro_relevance: Optional[str] = None
 
+    # Passages retrieved from the 20-year price-history store (src/rag).
+    # Empty when the store is not configured.
+    historical_context: StringList = Field(default_factory=list)
+
     # Final synthesised interpretation for this company.
     overall_interpretation: str = ""
+
+
+class ChangeRow(BaseModel):
+    """
+    One line of the day-over-day comparison. Values are pre-formatted
+    strings: the row is for display, built by ChangeDetectionService.
+    """
+
+    item: str
+    previous: str
+    current: str
+    change: str
+
+
+class CompanyNarrative(BaseModel):
+    """
+    LLM-written commentary for one company.
+    """
+
+    ticker: str = Field(description="Ticker exactly as given in the input")
+
+    macro_relevance: str = Field(
+        default="",
+        description="One or two sentences on how today's macro environment affects this company",
+    )
+
+    overall_interpretation: str = Field(
+        default="",
+        description="Two or three sentences interpreting this company's signals",
+    )
+
+
+class ReportNarrative(BaseModel):
+    """
+    The part of the daily report the LLM writes: commentary only.
+
+    Everything factual in DailyMarketReport (sentiment labels, drivers,
+    headlines, prices, timestamps) is attached in code from the upstream
+    agents' output. When the model was asked to return those too it retyped
+    them, and altered figures in the process (e.g. "£130,000" came back as
+    "Rs 13,00,000").
+    """
+
+    macro_overview: str = Field(
+        default="",
+        description="One paragraph on the current macro environment and its key risks",
+    )
+
+    company_narratives: list[CompanyNarrative] = Field(default_factory=list)
+
+    final_market_view: str = Field(
+        default="",
+        description="One paragraph giving the overall market view",
+    )
+
+    major_catalysts: StringList = Field(default_factory=list)
+
+    major_risks: StringList = Field(default_factory=list)
 
 
 class DailyMarketReport(BaseModel):
@@ -67,6 +132,14 @@ class DailyMarketReport(BaseModel):
 
     # Important market events (earnings, RBI, government actions, etc.).
     market_events: StringList = Field(default_factory=list)
+
+    # Price moves since the previous session's close.
+    market_changes: list[ChangeRow] = Field(default_factory=list)
+
+    # Sentiment / flow / rate changes since the previous pipeline run, and
+    # that run's date. Empty and None when no earlier run has been saved.
+    run_changes: list[ChangeRow] = Field(default_factory=list)
+    previous_run_date: Optional[str] = None
 
     # Synthesised final market view and risk/catalyst assessment.
     final_market_view: str = ""

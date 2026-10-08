@@ -28,6 +28,10 @@ class GraphState(TypedDict):
     # Keys are ticker symbols.
     reddit_signals: dict[str, RedditSignal]
 
+    # Passages retrieved per company from the price-history store (src/rag).
+    # Keys are ticker symbols; lists are empty when the store isn't configured.
+    historical_context: dict[str, list[str]]
+
     sentiments: dict[str, SentimentResult]
 
     report: DailyMarketReport | None

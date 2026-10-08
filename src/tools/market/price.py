@@ -1,16 +1,16 @@
 from typing import Optional, Dict, Any
 from langchain_core.tools import tool
-from src.tools.common.yahoo_finance import get_latest_quote
+from src.tools.common.yahoo_finance import get_latest_quote, nse_symbol
 
 @tool
 def get_stock_price(ticker: str) -> Optional[Dict[str, Any]]:
     """
     Fetch the latest stock price for a given ticker.
     """
-    quote = get_latest_quote(ticker.upper())
+    quote = get_latest_quote(nse_symbol(ticker))
     if not quote:
         return None
-        
+
     return {
         "ticker": ticker,
         "current_price": round(quote["price"], 2),

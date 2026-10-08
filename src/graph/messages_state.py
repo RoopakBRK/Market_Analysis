@@ -9,3 +9,5 @@ class AgentMessagesState(MessagesState):
     # this TypedDict's annotated keys, so any key missing from this schema is
     # silently dropped by graph.invoke(), even though a plain dict literal has it.
     company_input: str
+    # NSE symbol for the same run, for tools that need the symbol, not the name.
+    ticker_input: str

@@ -6,6 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
 
+[tool.pytest.ini_options]
+# Tests marked "live" call real network / LLM APIs and need the keys in .env.
+# They are skipped by default; run them with `pytest -m live`.
+markers = ["live: calls real network / LLM APIs"]
+addopts = "-m 'not live'"
+
 [tool.pyright]
 extraPaths = ["."]
 venvPath = "."

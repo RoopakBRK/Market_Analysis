@@ -13,7 +13,7 @@ Design:
 import sys
 from datetime import datetime
 
-from src.storage.postgres import get_session
+from src.storage.postgres import get_session, init_db
 from src.storage.models import (
     PipelineRun,
     MacroSummaryRecord,
@@ -164,21 +164,23 @@ def save_report(run_id: int, run_date: str, report) -> bool:
             return False
         try:
             company_intel = [c.model_dump() for c in report.company_intelligence]
-            record = ReportRecord(
-                run_id=run_id,
-                run_date=run_date,
-                overall_market_sentiment=report.overall_market_sentiment,
-                overall_confidence=report.overall_confidence,
-                macro_overview=report.macro_overview,
-                key_macro_drivers=report.key_macro_drivers,
-                company_intelligence=company_intel,
-                final_market_view=report.final_market_view,
-                major_catalysts=report.major_catalysts,
-                major_risks=report.major_risks,
-                market_events=report.market_events,
-                generated_at=report.generated_at,
-            )
-            session.add(record)
+            # reports.run_date is unique: a second run on the same day
+            # replaces that day's report instead of failing the insert.
+            record = session.query(ReportRecord).filter(ReportRecord.run_date == run_date).first()
+            if record is None:
+                record = ReportRecord(run_date=run_date)
+                session.add(record)
+            record.run_id = run_id
+            record.overall_market_sentiment = report.overall_market_sentiment
+            record.overall_confidence = report.overall_confidence
+            record.macro_overview = report.macro_overview
+            record.key_macro_drivers = report.key_macro_drivers
+            record.company_intelligence = company_intel
+            record.final_market_view = report.final_market_view
+            record.major_catalysts = report.major_catalysts
+            record.major_risks = report.major_risks
+            record.market_events = report.market_events
+            record.generated_at = report.generated_at
             return True
         except Exception as exc:
             print(f"[Storage] Failed to save report: {exc}", file=sys.stderr)
@@ -245,6 +247,52 @@ def save_financial_data(run_date: str, financial_data_dict: dict) -> bool:
         except Exception as exc:
             print(f"[Storage] Failed to save financial data: {exc}", file=sys.stderr)
             return False
+
+
+# ── Whole pipeline run ────────────────────────────────────────────────────────
+
+def persist_pipeline_result(state: dict) -> bool:
+    """
+    Persist everything one pipeline run produced (the final graph state).
+
+    Creates the tables on first use. Returns True if everything was saved,
+    False if the DB is unavailable or any part failed. Never raises.
+    """
+    report = state.get("report")
+    run_date = report.date if report is not None else datetime.utcnow().date().isoformat()
+    run_id = None
+
+    try:
+        if not init_db():
+            return False
+
+        run_id = create_pipeline_run(run_date)
+        if run_id is None:
+            return False
+
+        macro_summary = state.get("macro_summary")
+        saved = [
+            save_macro_summary(run_id, run_date, macro_summary) if macro_summary is not None else True,
+            save_company_news(run_id, run_date, state.get("company_news") or {}),
+            save_sentiments(run_id, run_date, state.get("sentiments") or {}),
+            save_financial_data(run_date, state.get("financial_data") or {}),
+            save_reddit_signals(run_date, state.get("reddit_signals") or {}),
+            save_report(run_id, run_date, report) if report is not None else True,
+        ]
+        success = all(saved)
+        complete_pipeline_run(run_id, success=success, error=None if success else "Some records failed to save")
+        return success
+
+    except Exception as exc:
+        # A save's commit happens as its session closes, outside that
+        # function's own try/except, so a commit error surfaces here.
+        print(f"[Storage] Failed to persist pipeline run: {exc}", file=sys.stderr)
+        if run_id is not None:
+            try:
+                complete_pipeline_run(run_id, success=False, error=str(exc))
+            except Exception:
+                pass
+        return False
 
 
 # ── Queries ───────────────────────────────────────────────────────────────────

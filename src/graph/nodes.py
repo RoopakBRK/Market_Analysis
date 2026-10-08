@@ -1,3 +1,4 @@
+import datetime
 import time
 from src.agents.macro_agent import MacroAgent
 from src.agents.company_news_agent import CompanyNewsAgent
@@ -6,6 +7,10 @@ from src.agents.financial_data_agent import FinancialDataAgent
 from src.agents.reddit_sentiment_agent import RedditSentimentAgent
 from src.agents.sentiment_agent import SentimentAgent
 from src.agents.report_agent import ReportAgent
+from src.agents.historical_context_agent import HistoricalContextAgent
+from src.services.change_detection import ChangeDetectionService
+from src.services.historical_service import load_previous_snapshot
+from src.utils.constants import WATCHLIST
 
 report_agent = ReportAgent()
 sentiment_agent = SentimentAgent()
@@ -14,6 +19,8 @@ company_agent = CompanyNewsAgent()
 macro_agent = MacroAgent()
 financial_data_agent = FinancialDataAgent()
 reddit_sentiment_agent = RedditSentimentAgent()
+historical_context_agent = HistoricalContextAgent()
+change_detection = ChangeDetectionService()
 
 
 def macro_node(state):
@@ -40,13 +47,15 @@ def macro_node(state):
 def company_news_node(state):
     watchlist = state.get("watchlist", [])
     news = {}
-    for company in watchlist:
+    for ticker in watchlist:
+        # News is searched by company name; exchange filings by ticker.
+        company = WATCHLIST.get(ticker, ticker)
         try:
-            news[company] = company_agent.run(company)
+            news[ticker] = company_agent.run(company, ticker=ticker)
         except Exception as e:
-            print(f"[Graph Warning] CompanyNewsAgent failed for {company}: {e}")
+            print(f"[Graph Warning] CompanyNewsAgent failed for {ticker}: {e}")
             from src.models.company import CompanyNews
-            news[company] = CompanyNews(ticker=company, company_name=company, articles=[], total_articles=0)
+            news[ticker] = CompanyNews(ticker=ticker, company_name=company, articles=[], total_articles=0)
         time.sleep(2)  # Pace API requests
     return {"company_news": news}
 
@@ -82,14 +91,30 @@ def reddit_sentiment_node(state):
     watchlist = state.get("watchlist", [])
     reddit_signals = {}
     for ticker in watchlist:
+        company = WATCHLIST.get(ticker, ticker)
         try:
-            reddit_signals[ticker] = reddit_sentiment_agent.run(ticker)
+            reddit_signals[ticker] = reddit_sentiment_agent.run(company).model_copy(update={"ticker": ticker})
         except Exception as e:
             print(f"[Graph Warning] RedditSentimentAgent failed for {ticker}: {e}")
             from src.models.reddit import RedditSignal
             from src.tools.common.normalization import utc_now_iso
-            reddit_signals[ticker] = RedditSignal(ticker=ticker, company_name=ticker, retrieved_at=utc_now_iso())
+            reddit_signals[ticker] = RedditSignal(ticker=ticker, company_name=company, retrieved_at=utc_now_iso())
     return {"reddit_signals": reddit_signals}
+
+
+def historical_context_node(state):
+    watchlist = state.get("watchlist", [])
+    historical_context = {}
+    for ticker in watchlist:
+        company = WATCHLIST.get(ticker, ticker)
+        try:
+            historical_context[ticker] = historical_context_agent.run(
+                ticker, company, state.get("market_data", {}).get(ticker)
+            )
+        except Exception as e:
+            print(f"[Graph Warning] HistoricalContextAgent failed for {ticker}: {e}")
+            historical_context[ticker] = []
+    return {"historical_context": historical_context}
 
 
 def sentiment_node(state):
@@ -122,20 +147,28 @@ def sentiment_node(state):
 
 def report_node(state):
     try:
+        # Day-over-day comparison: prices against the previous close, and the
+        # pipeline's own signals against the last run saved before today.
+        macro_summary = state.get("macro_summary")
+        previous_run = load_previous_snapshot(before_date=datetime.date.today().isoformat())
+
         report = report_agent.run(
-            macro_summary=state.get("macro_summary"),
+            macro_summary=macro_summary,
             company_news=state.get("company_news", {}),
             market_data=state.get("market_data", {}),
             financial_data=state.get("financial_data", {}),
             reddit_signals=state.get("reddit_signals", {}),
-            sentiments=state.get("sentiments", {})
+            sentiments=state.get("sentiments", {}),
+            historical_context=state.get("historical_context", {}),
+            market_changes=change_detection.market_changes(macro_summary, state.get("market_data", {})),
+            run_changes=change_detection.run_changes(macro_summary, state.get("sentiments", {}), previous_run),
+            previous_run_date=previous_run["date"] if previous_run else None,
         )
     except Exception as e:
         print(f"[Graph Warning] ReportAgent failed: {e}")
         from src.models.report import DailyMarketReport
         from src.models.macro import MacroSummary
         from src.tools.common.normalization import utc_now_iso
-        import datetime
         # Prefer the real MacroSummary already collected upstream; only
         # fall back to a placeholder if macro collection itself failed too.
         fallback_macro = state.get("macro_summary") or MacroSummary(

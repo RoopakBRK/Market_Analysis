@@ -8,6 +8,7 @@ from src.graph.nodes import (
     market_data_node,
     financial_data_node,
     reddit_sentiment_node,
+    historical_context_node,
     sentiment_node,
     report_node,
 )
@@ -23,6 +24,7 @@ builder.add_node("company_news_agent", company_news_node)
 builder.add_node("market_data_agent", market_data_node)
 builder.add_node("financial_data_agent", financial_data_node)
 builder.add_node("reddit_sentiment_agent", reddit_sentiment_node)
+builder.add_node("historical_context_agent", historical_context_node)
 builder.add_node("sentiment_agent", sentiment_node)
 builder.add_node("report_agent", report_node)
 
@@ -44,8 +46,11 @@ builder.add_edge("market_data_agent", "sentiment_agent")
 builder.add_edge("financial_data_agent", "sentiment_agent")
 builder.add_edge("reddit_sentiment_agent", "sentiment_agent")
 
-# Generate report
-builder.add_edge("sentiment_agent", "report_agent")
+# Historical context is looked up from today's market data
+builder.add_edge("market_data_agent", "historical_context_agent")
+
+# Generate report once both sentiment and historical context are ready
+builder.add_edge(["sentiment_agent", "historical_context_agent"], "report_agent")
 builder.add_edge("report_agent", END)
 
 

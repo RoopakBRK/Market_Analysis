@@ -83,7 +83,11 @@ class SentimentAgent:
         else:
             input_text += "No Reddit community signals available.\n"
 
-        json_instruction = build_json_instruction(SentimentResult)
+        # Fields the code fills in itself are left out of the requested shape.
+        json_instruction = build_json_instruction(
+            SentimentResult,
+            exclude_fields=("ticker", "company_name", "articles_analyzed", "reddit_sentiment"),
+        )
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -132,6 +136,15 @@ class SentimentAgent:
         data["ticker"] = ticker
         data["company_name"] = company_name
         data["articles_analyzed"] = len(company_news.articles) if has_news else 0
+
+        # Per-source signals are only meaningful when that source supplied
+        # data. Left to the model, a skipped source still comes back with a
+        # plausible-looking label ("Neutral"), so pin these in code.
+        data["reddit_sentiment"] = reddit_signal.overall_sentiment if has_reddit else None
+        if not has_financials:
+            data["financial_data_signal"] = None
+        if not has_news:
+            data["verified_news_sentiment"] = None
 
         try:
             return SentimentResult.model_validate(data)

@@ -183,5 +183,56 @@ def test_llm_failure_mocked(monkeypatch):
     with pytest.raises(ValueError, match="SentimentAgent LLM Failure: The model 'mock-model' returned an entirely empty response."):
         agent.run(news)
 
+def test_signals_without_source_data_are_not_taken_from_the_llm():
+    # The model volunteers Reddit and financial signals although neither
+    # source supplied any data for this company.
+    class OverconfidentLLM:
+        model = "mock-model"
+        def invoke(self, messages, *args, **kwargs):
+            return AIMessage(content=json.dumps({
+                "sentiment": "Bullish",
+                "confidence": 80,
+                "impact": "Medium",
+                "summary": "Mock summary",
+                "positive_drivers": ["Growth"],
+                "negative_drivers": [],
+                "verified_news_sentiment": "Bullish",
+                "financial_data_signal": "Positive",
+                "reddit_sentiment": "Neutral",
+            }))
+
+    agent = get_agent()
+    agent.llm = OverconfidentLLM()
+    news = CompanyNews(
+        ticker="RELIANCE",
+        company_name="Reliance",
+        articles=[NewsArticle(title="Good news", summary="Growth", source="ET", url="http://x", published_at="")]
+    )
+    result = agent.run(news)
+    assert result.verified_news_sentiment == "Bullish"
+    assert result.financial_data_signal is None
+    assert result.reddit_sentiment is None
+
+def test_reddit_signal_is_copied_from_the_reddit_agent():
+    from src.models.reddit import RedditPost, RedditSignal
+
+    agent = get_agent()
+    agent.llm = MockLLM("Bullish")
+    news = CompanyNews(
+        ticker="RELIANCE",
+        company_name="Reliance",
+        articles=[NewsArticle(title="Good news", summary="Growth", source="ET", url="http://x", published_at="")]
+    )
+    reddit = RedditSignal(
+        ticker="RELIANCE",
+        company_name="Reliance",
+        posts=[RedditPost(title="Selling", subreddit="s", url="u", published_at="")],
+        overall_sentiment="Bearish",
+        post_count=1,
+        retrieved_at="",
+    )
+    result = agent.run(news, reddit_signal=reddit)
+    assert result.reddit_sentiment == "Bearish"
+
 if __name__ == "__main__":
     print("Run this file using: pytest tests/test_sentiment_agent.py -v")

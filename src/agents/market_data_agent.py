@@ -1,10 +1,10 @@
-import requests
 from typing import TypedDict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langgraph.graph import StateGraph, START, END
 from pydantic import ValidationError
 
 from src.models.market import MarketData
+from src.tools.common.yahoo_finance import get_sector_industry, nse_symbol
 from src.tools.market.price import get_stock_price
 from src.tools.market.indicators import get_technical_indicators
 from src.tools.market.sector import get_sector_performance
@@ -16,24 +16,6 @@ class MarketDataState(TypedDict):
     tech_data: dict | None
     sector_data: dict | None
     final_result: MarketData | None
-
-
-def get_sector_for_ticker(ticker: str) -> str:
-    """Fetch the actual sector name for a ticker from Yahoo Finance."""
-    url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=assetProfile"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        result = data.get("quoteSummary", {}).get("result", [])
-        if result and result[0]:
-            sector = result[0].get("assetProfile", {}).get("sector")
-            if sector:
-                return sector
-    except Exception:
-        pass
-    return ""
 
 
 class MarketDataAgent:
@@ -55,13 +37,13 @@ class MarketDataAgent:
         ticker = state["ticker"]
         
         # Dynamically determine the real sector string to avoid semantic misuse of the ticker
-        resolved_sector = get_sector_for_ticker(ticker)
+        sector, industry = get_sector_industry(nse_symbol(ticker))
         
         # Define the exact execution arguments based on the tool signatures
         execution_plan = [
             ("price_data", get_stock_price, {"ticker": ticker}),
             ("tech_data", get_technical_indicators, {"ticker": ticker}),
-            ("sector_data", get_sector_performance, {"sector": resolved_sector}),
+            ("sector_data", get_sector_performance, {"sector": sector, "industry": industry}),
         ]
         
         updates = {}
@@ -101,11 +83,13 @@ class MarketDataAgent:
         if "error" not in tech_data:
             merged["rsi"] = tech_data.get("rsi")
             merged["macd"] = tech_data.get("macd")
+            merged["macd_signal"] = tech_data.get("macd_signal")
             merged["vwap"] = tech_data.get("vwap")
             
         # Merge Sector Performance
         if "error" not in sector_data:
-            merged["sector"] = sector_data.get("sector")
+            merged["sector"] = sector_data.get("sector") or None
+            merged["sector_index"] = sector_data.get("index")
             merged["sector_performance"] = sector_data.get("performance")
             
         try:

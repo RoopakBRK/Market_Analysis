@@ -6,7 +6,6 @@ from config.settings import settings
 
 import time
 import random
-from langchain_core.messages import AIMessage
 
 llm_usage_stats = {
     "MacroAgent": 0,
@@ -31,36 +30,55 @@ def print_usage_stats():
     print(f"{'Total:':<20} {total} calls\n")
 
 class RateLimitedLLM:
-    def __init__(self, llm, agent_name: str):
+    """
+    Wraps a chat model with usage counting, rate-limit retries and an
+    optional fallback model.
+
+    Failures are raised, not swallowed: callers (the graph nodes) already
+    catch exceptions and substitute a placeholder result, and need the real
+    error to report. Returning an empty message instead made every failure
+    look like "the model returned an empty response".
+    """
+
+    def __init__(self, llm, agent_name: str, fallback_llm=None):
         self.llm = llm
         self.agent_name = agent_name
+        self.fallback_llm = fallback_llm
+
+    def _invoke_with_retry(self, llm, *args, **kwargs):
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                return llm.invoke(*args, **kwargs)
+            except Exception as e:
+                error_msg = str(e).lower()
+                retryable = "429" in error_msg or "rate limit" in error_msg or "503" in error_msg
+                if not retryable or attempt == max_retries - 1:
+                    raise
+
+                sleep_time = (2 ** attempt) + random.uniform(1, 3)
+                print(f"\n[{self.agent_name}] Rate limit hit. Retrying in {sleep_time:.1f}s...")
+                time.sleep(sleep_time)
 
     def invoke(self, *args, **kwargs):
         global llm_usage_stats
         llm_usage_stats[self.agent_name] = llm_usage_stats.get(self.agent_name, 0) + 1
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                return self.llm.invoke(*args, **kwargs)
-            except Exception as e:
-                error_msg = str(e).lower()
-                if "429" in error_msg or "rate limit" in error_msg or "503" in error_msg:
-                    if attempt == max_retries - 1:
-                        print(f"\n[{self.agent_name}] Permanent RateLimitError after {max_retries} attempts.")
-                        return AIMessage(content="")
-                    
-                    sleep_time = (2 ** attempt) + random.uniform(1, 3)
-                    print(f"\n[{self.agent_name}] Rate limit hit. Retrying in {sleep_time:.1f}s...")
-                    time.sleep(sleep_time)
-                else:
-                    print(f"\n[{self.agent_name}] Unexpected LLM Error: {e}")
-                    return AIMessage(content="")
+
+        try:
+            return self._invoke_with_retry(self.llm, *args, **kwargs)
+        except Exception as e:
+            if self.fallback_llm is None:
+                raise
+            print(f"\n[{self.agent_name}] Primary LLM failed ({type(e).__name__}: {e}). Trying fallback model...")
+
+        llm_usage_stats[self.agent_name] += 1
+        return self._invoke_with_retry(self.fallback_llm, *args, **kwargs)
 
     def bind_tools(self, *args, **kwargs):
         # Wrap the bound LLM so it continues to track usage and retry
         bound_llm = self.llm.bind_tools(*args, **kwargs)
-        return RateLimitedLLM(bound_llm, self.agent_name)
+        bound_fallback = self.fallback_llm.bind_tools(*args, **kwargs) if self.fallback_llm else None
+        return RateLimitedLLM(bound_llm, self.agent_name, bound_fallback)
 
 class LLMGateway:
     """
@@ -88,7 +106,7 @@ class LLMGateway:
         )
 
     def get_llm(self, agent_name: str = "Unknown"):
-        return RateLimitedLLM(self.primary_llm, agent_name)
+        return RateLimitedLLM(self.primary_llm, agent_name, fallback_llm=self.fallback_llm)
 
     def get_fallback_llm(self, agent_name: str = "Unknown"):
         return RateLimitedLLM(self.fallback_llm, agent_name)

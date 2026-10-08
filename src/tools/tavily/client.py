@@ -9,7 +9,8 @@ Responsibilities:
 """
 
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 from config.settings import settings
@@ -80,14 +81,43 @@ def _normalize_result(item: dict[str, Any], query: str) -> dict[str, Any]:
     }
 
 
+def _is_recent(published_at: str, days_back: int) -> bool:
+    """
+    True if an article's publication date falls inside the search window.
+
+    Tavily treats `days` as a hint, not a filter — a 35-day search has
+    returned articles more than six months old — so the window is enforced
+    here. Undated results are kept: there is nothing to judge them by.
+    """
+    if not published_at:
+        return True
+    try:
+        published = parsedate_to_datetime(published_at)
+    except (TypeError, ValueError):
+        try:
+            published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    # One day of slack for timezone differences around the cutoff.
+    return datetime.now(timezone.utc) - published <= timedelta(days=days_back + 1)
+
+
 def search(
     query: str,
     max_results: int = _DEFAULT_MAX_RESULTS,
     days_back: int = _DEFAULT_DAYS_BACK,
     search_depth: str = "basic",
+    topic: str = "news",
 ) -> list[dict[str, Any]]:
     """
     Execute a Tavily search and return a list of normalised article dicts.
+
+    topic defaults to "news": Tavily only honours `days` (and only returns a
+    publication date) for news searches. A "general" search ignores the date
+    window and tends to return evergreen pages such as live share-price
+    quotes rather than recent articles.
 
     Returns [] gracefully on:
     - missing API key
@@ -106,6 +136,7 @@ def search(
             query=query,
             max_results=max_results,
             search_depth=search_depth,
+            topic=topic,
             days=days_back,
         )
 
@@ -116,8 +147,14 @@ def search(
             return []
 
         normalized = [_normalize_result(item, query) for item in raw_results if isinstance(item, dict)]
-        print(f"[Tavily] Query '{query[:60]}' → {len(normalized)} results", file=sys.stderr)
-        return normalized
+        recent = [a for a in normalized if _is_recent(a["published_at"], days_back)]
+        stale = len(normalized) - len(recent)
+        print(
+            f"[Tavily] Query '{query[:60]}' → {len(recent)} results"
+            + (f" ({stale} older than {days_back} days dropped)" if stale else ""),
+            file=sys.stderr,
+        )
+        return recent
 
     except Exception as exc:
         print(f"[Tavily] Search failed for '{query[:60]}': {type(exc).__name__}: {exc}", file=sys.stderr)

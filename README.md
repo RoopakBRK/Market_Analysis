@@ -33,16 +33,24 @@ The system focuses on **daily news-driven sentiment**, not stock-price predictio
 START
   ├── MacroAgent            → Macroeconomic signals + Tavily news
   ├── CompanyNewsAgent      → Parallel news retrieval (Reuters, ET, NSE, Tavily...)
-  ├── MarketDataAgent       → Price, RSI, MACD, VWAP via Yahoo Finance
+  ├── MarketDataAgent       → Price, RSI, MACD, VWAP, sector index via Yahoo Finance
   ├── FinancialDataAgent    → PE, EPS, Revenue, upcoming events
   └── RedditSentimentAgent  → Community sentiment (r/IndiaInvestments etc.)
           │
           ▼
     SentimentAgent          → LLM reasoning over all signals
+    HistoricalContextAgent  → Precedents from 20 years of price history (Qdrant RAG)
           │
           ▼
      ReportAgent            → Final daily market intelligence report
 ```
+
+The LLM writes only the commentary. Every fact in the report — sentiment
+labels, drivers, headlines, prices, timestamps — is copied in code from the
+agents that collected it, so the model cannot alter a figure by retyping it.
+
+The companies covered are set in `src/utils/constants.py` (`WATCHLIST`: NSE
+symbol → company name).
 
 ---
 
@@ -94,15 +102,19 @@ REDDIT_CLIENT_ID=your_client_id
 REDDIT_CLIENT_SECRET=your_client_secret
 REDDIT_USER_AGENT=MarketAnalysisBot/1.0
 
+# Qdrant — price-history RAG (optional — pipeline continues without it)
+QDRANT_URL=https://your-cluster.cloud.qdrant.io
+QDRANT_API_KEY=your_qdrant_api_key
+
 # PostgreSQL (optional — pipeline continues without it)
 DATABASE_URL=postgresql://user:password@localhost:5432/market_analysis
 ```
 
-### 5. Initialise the database (optional)
+### 5. Database (optional)
 
-```bash
-python -c "from src.storage.postgres import init_db; init_db()"
-```
+Set `DATABASE_URL` and each run is saved to PostgreSQL; the tables are
+created on the first run. Leave it unset (or unreachable) and the pipeline
+simply skips saving.
 
 ---
 
@@ -121,11 +133,38 @@ The pipeline will:
 - Synthesise sentiment per company
 - Print the full daily report to stdout
 - Write a formatted PDF report to `reports/market_report_<date>.pdf`
-- Persist results to PostgreSQL (if `DATABASE_URL` is set)
+- Save a snapshot to `data/history/<date>.json`, used by the next day's
+  "What Changed" comparison
+- Save the run to PostgreSQL (if `DATABASE_URL` is set and reachable). A
+  second run on the same day replaces that day's report.
 
 A single run takes a few minutes (data collection is paced with short
 delays between companies, plus real LLM calls for sentiment + report
 synthesis).
+
+### What Changed (day-over-day)
+
+Every report has a "What Changed" section. Price moves (Nifty 50, Sensex,
+gold, crude, USD/INR, US indices, each watchlist stock) are compared with the
+previous close. Sentiment, FII/DII flows and the RBI repo rate are compared
+with the previous run, read from `data/history/`; on the very first run there
+is no earlier snapshot, so that second table starts the next day.
+
+### Price-history RAG (optional)
+
+The pipeline can add historical precedent to each company's section from a
+Qdrant store holding 20 years of NIFTY 50 price history. To set it up:
+
+```bash
+# 1. Put QDRANT_URL and QDRANT_API_KEY in .env
+# 2. Build the store (downloads history with yfinance; embeddings run locally)
+python -m src.rag.ingest
+# 3. Ask it something
+python -m src.rag.query "How did Adani Ports do in March 2020?"
+```
+
+Without `QDRANT_URL` the pipeline logs `[RAG] Skipped` and runs as before.
+The chunking, embedding and reranking design is described in `structure.md`.
 
 ### Reddit is optional
 
@@ -139,10 +178,13 @@ as `Unknown` for that run. No crash, no manual flag needed.
 ## Running Tests
 
 ```bash
-pytest tests/ -v --tb=short
+pytest tests/ -v --tb=short      # offline tests: no network, no API keys
+pytest tests/ -m live -v -s      # live checks: real APIs, needs the keys in .env
 ```
 
-> Tests do **not** require live API keys — all external calls are mocked.
+> The default run is fully offline — external calls are mocked. Tests that
+> call real services (scrapers, Tavily, the LLM, the full pipeline) are
+> marked `live` and skipped unless you ask for them with `-m live`.
 
 ---
 
@@ -159,7 +201,7 @@ pip install -r requirements.txt
 # 3. Run the full pipeline (prints report to stdout + writes a PDF to reports/)
 python apps/worker/run_pipeline.py
 
-# 4. Run the test suite
+# 4. Run the test suite (offline; add `-m live` for the live checks)
 pytest tests/ -v --tb=short
 
 # 5. Open the most recently generated PDF report
@@ -167,8 +209,6 @@ open reports/market_report_$(date +%Y-%m-%d).pdf     # macOS
 # xdg-open reports/market_report_$(date +%Y-%m-%d).pdf  # Linux
 # start reports\market_report_%date%.pdf                # Windows
 
-# 6. (Optional) Initialise the PostgreSQL schema
-python -c "from src.storage.postgres import init_db; init_db()"
 ```
 
 ---
@@ -187,6 +227,8 @@ Market_Analysis/
 │   ├── graph/                    # LangGraph workflow + state
 │   ├── models/                   # Pydantic domain models
 │   ├── prompts/                  # LLM system prompts
+│   ├── rag/                      # Price-history RAG (yfinance → Qdrant)
+│   ├── services/                 # PDF rendering, day-over-day comparison, run history
 │   ├── storage/                  # PostgreSQL persistence layer
 │   ├── tools/                    # Data retrieval tools (Tavily, Reddit, NSE...)
 │   └── llm/                      # LLM gateway + usage tracking

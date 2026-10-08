@@ -13,7 +13,9 @@ class Settings(BaseSettings):
     GROQ_FALLBACK_API_KEY: str = os.getenv("GROQ_FALLBACK_API_KEY", "")
 
     PRIMARY_MODEL: str = "openai/gpt-oss-20b"
-    FALLBACK_MODEL: str = "openai/gpt-oss-20b"
+    # A different model from the primary, called with the fallback API key, so
+    # the fallback covers a model outage as well as a rate-limited key.
+    FALLBACK_MODEL: str = "openai/gpt-oss-120b"
 
     # Output token cap for all LLM calls. The ReportAgent's JSON payload grows
     # with watchlist size and can exceed provider defaults, truncating the
@@ -44,6 +46,13 @@ class Settings(BaseSettings):
     REDDIT_USER_AGENT: str = os.getenv(
         "REDDIT_USER_AGENT", "MarketAnalysisBot/1.0"
     )
+
+    # ── Qdrant (price-history RAG store) ─────────────────────────────────────
+    # Leave QDRANT_URL blank to run without the store; the pipeline then
+    # skips historical context, the same way it skips Reddit.
+    QDRANT_URL: str = os.getenv("QDRANT_URL", "")
+    QDRANT_API_KEY: str = os.getenv("QDRANT_API_KEY", "")
+    QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "nifty_price_history")
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,6 +1,8 @@
 import json
+import pytest
 from src.agents.macro_agent import MacroAgent
 
+@pytest.mark.live
 def test_macro():
     print("\n" + "=" * 60)
     print("MACRO AGENT TEST")

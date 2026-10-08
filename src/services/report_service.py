@@ -27,7 +27,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from src.models.report import CompanyIntelligence, DailyMarketReport
+from src.models.report import ChangeRow, CompanyIntelligence, DailyMarketReport
 
 # ── Text sanitization ────────────────────────────────────────────────────────
 # Helvetica (reportlab's default base-14 font, used here so no font file needs
@@ -170,6 +170,27 @@ def _kv_table(rows: list[tuple[str, str]], styles: dict) -> Table:
     return t
 
 
+def _changes_table(rows: list[ChangeRow], styles: dict) -> Table:
+    """Item / Previous / Now / Change table for the day-over-day section."""
+    header = [Paragraph(f"<b>{h}</b>", styles["BodySmall"]) for h in ("Item", "Previous", "Now", "Change")]
+    data = [header] + [
+        [Paragraph(_sanitize(cell), styles["BodySmall"]) for cell in (r.item, r.previous, r.current, r.change)]
+        for r in rows
+    ]
+    t = Table(data, colWidths=[5.0 * cm, 3.6 * cm, 3.6 * cm, None])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BACKGROUND", (0, 0), (-1, 0), _LIGHT_GREY),
+        ("BOX", (0, 0), (-1, -1), 0.4, _BORDER_GREY),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, _BORDER_GREY),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    return t
+
+
 def _company_section(company: CompanyIntelligence, styles: dict) -> list:
     flow = []
     header = Table(
@@ -213,7 +234,17 @@ def _company_section(company: CompanyIntelligence, styles: dict) -> list:
         flow.append(_bullet_list(company.important_news, styles))
         flow.append(Spacer(1, 6))
 
+    if company.historical_context:
+        flow.append(Paragraph(
+            "<b>Historical Context</b> (from 20 years of price history; prices adjusted for splits and dividends)",
+            styles["BodySmall"],
+        ))
+        flow.append(_bullet_list(company.historical_context, styles))
+        flow.append(Spacer(1, 6))
+
     extra_rows = []
+    if company.market_snapshot:
+        extra_rows.append(("Market Data", company.market_snapshot))
     if company.macro_relevance:
         extra_rows.append(("Macro Relevance", company.macro_relevance))
     if company.reddit_community_signal:
@@ -302,6 +333,25 @@ def build_report_pdf(report: DailyMarketReport, output_path: str) -> str:
             rows.append((label, ", ".join(parts) if parts else str(val)))
         if rows:
             story.append(_kv_table(rows, styles))
+
+    # ── Day-over-day changes ─────────────────────────────────────────────
+    if report.market_changes or report.run_changes:
+        story.append(Paragraph("What Changed", styles["H1"]))
+        if report.market_changes:
+            story.append(Paragraph("Markets - versus the previous close", styles["H2"]))
+            story.append(_changes_table(report.market_changes, styles))
+        if report.run_changes:
+            story.append(Paragraph(
+                f"Signals - versus the run on {_format_display_date(report.previous_run_date)}", styles["H2"]
+            ))
+            story.append(_changes_table(report.run_changes, styles))
+        else:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph(
+                "<i>No earlier run is saved yet, so sentiment, flow and rate comparisons "
+                "start with the next run.</i>",
+                styles["BodySmall"],
+            ))
 
     # ── Company intelligence ─────────────────────────────────────────────
     if report.company_intelligence:

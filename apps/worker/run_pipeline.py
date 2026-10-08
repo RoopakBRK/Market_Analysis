@@ -15,17 +15,19 @@ if str(_REPO_ROOT) not in sys.path:
 
 from src.graph.workflow import graph
 from src.graph.state import GraphState
+from src.utils.constants import WATCHLIST
 
 
 def main():
 
     initial_state: GraphState = {
-        "watchlist": ["RELIANCE", "TCS", "INFOSYS"],
+        "watchlist": list(WATCHLIST),
         "macro_summary": None,
         "company_news": {},
         "market_data": {},
         "financial_data": {},
         "reddit_signals": {},
+        "historical_context": {},
         "sentiments": {},
         "report": None,
     }
@@ -52,6 +54,20 @@ def main():
             print(f"\n--- PDF REPORT ---\nWritten to: {written}")
         except Exception as e:
             print(f"\n[Warning] Failed to write PDF report: {e}")
+
+        # Saved for tomorrow's "What Changed" comparison.
+        from src.services.historical_service import build_snapshot, save_snapshot
+        snapshot = build_snapshot(report.date, result.get("macro_summary"), result.get("sentiments", {}))
+        print(f"\n--- HISTORY ---\nSnapshot saved to: {save_snapshot(snapshot)}")
+
+    # Imported here, not at the top: importing the storage package opens the
+    # database connection, which is only wanted once there is something to save.
+    from src.storage.repositories import persist_pipeline_result
+    print("\n--- STORAGE ---")
+    if persist_pipeline_result(result):
+        print("Run saved to the database.")
+    else:
+        print("Run not saved (database not configured, unreachable, or the save failed).")
 
     from src.llm.gateway import print_usage_stats
     print_usage_stats()

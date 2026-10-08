@@ -1,51 +1,41 @@
 import requests
-import urllib.parse
 from langchain_core.tools import tool
-from src.models.company import NewsArticle
-from src.tools.common.scraper_utils import (
-    fetch_html, clean_text, absolute_url, deduplicate_articles
-)
+from src.tools.common.scraper_utils import deduplicate_articles
+from src.tools.company.nse import announcement_to_article, fetch_announcements
 
-ARTICLE_SELECTORS = [".result__snippet", ".result__url"]
+# Exchange filing categories that are investor communications, as opposed to
+# general or compliance filings.
+_INVESTOR_CATEGORIES = (
+    "press release",
+    "investor presentation",
+    "analysts/institutional investor meet",
+    "financial result",
+    "outcome of board meeting",
+    "earnings call",
+    "transcript",
+)
 
 
 @tool
 def get_investor_relations(company: str) -> dict:
     """
-    Fetch latest Investor Relations updates.
-    NOTE: Currently degraded. DuckDuckGo HTML search returns 202 Accepted to challenge bots.
+    Fetch a company's recent investor communications (press releases, results,
+    investor presentations and analyst-meet notices) as filed with NSE.
+    `company` must be the NSE trading symbol (e.g. "ADANIPORTS").
     """
     try:
-        query = f"{company} investor relations press releases"
-        url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
-        
-        parser = fetch_html(url)
-        if not parser:
-            raise requests.RequestException("Failed to fetch or parse HTML")
-            
         articles = []
-        
-        nodes = parser.css("a.result__url")[:5]
-        for node in nodes:
-            link = absolute_url("", node.attributes.get("href") or "")
-            
-            # Find the closest previous title snippet
-            # duckduckgo layout uses a class result__snippet for titles sometimes
-            # We'll just use a generic approach for the title here since it's a search result
-            title_node = node.parent.css_first("a.result__snippet") if node.parent else None
-            title = clean_text(title_node.text() if title_node else "Investor Relations Link")
-            
-            if link:
-                article = NewsArticle(
-                    title=title,
-                    summary="",
-                    url=link,
-                    published_at="",
-                    source="Investor Relations",
-                    is_official=True,
-                ).model_dump()
+        # Results and presentations are infrequent, so look back a month.
+        for item in fetch_announcements(company, days=30):
+            category = (item.get("desc") or "").lower()
+            if not any(wanted in category for wanted in _INVESTOR_CATEGORIES):
+                continue
+            article = announcement_to_article(item, source="Investor Relations")
+            if article:
                 articles.append(article)
-                
+            if len(articles) >= 5:
+                break
+
         return {
             "company": company,
             "articles": deduplicate_articles(articles),

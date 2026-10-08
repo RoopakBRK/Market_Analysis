@@ -10,7 +10,9 @@ def search_company_news_tavily(company: str) -> dict:
     Returns a dict with 'company' and 'articles' (list of normalised dicts).
     Returns an empty articles list gracefully if Tavily is unavailable.
     """
-    query = f"{company} stock news India NSE latest"
+    # Just the name: the search is already scoped to recent news, and words
+    # like "stock" / "NSE" / "latest" pull in share-price pages instead.
+    query = company
     results = tavily_client.search(query=query, max_results=5, days_back=3)
     return {
         "company": company,

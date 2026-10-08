@@ -1,3 +1,4 @@
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.messages import ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -25,6 +26,9 @@ TOOLS = [
     search_company_news_tavily,
 ]
 
+# Tools that look a company up by its NSE symbol rather than by name.
+_SYMBOL_TOOLS = {get_nse_announcements.name, get_investor_relations.name}
+
 
 class CompanyNewsAgent:
     def __init__(self):
@@ -42,13 +46,15 @@ class CompanyNewsAgent:
     def collect_data(self, state: AgentMessagesState):
         """Deterministically collect data from all news tools without an LLM."""
         company = state.get("company_input", "")
+        ticker = state.get("ticker_input") or company
         tool_results = []
         
         def run_tool(tool):
             try:
                 # Call tool directly using its underlying function
                 if "company" in tool.args:
-                    result = tool.invoke({"company": company})
+                    query = ticker if tool.name in _SYMBOL_TOOLS else company
+                    result = tool.invoke({"company": query})
                 else:
                     result = tool.invoke({})
                 return tool.name, result
@@ -69,25 +75,36 @@ class CompanyNewsAgent:
                 
         return {"messages": tool_results}
 
-    def score_article(self, article: NewsArticle) -> int:
+    def score_article(self, article: NewsArticle, company: str = "", ticker: str = "") -> int:
         score = article.relevance_score
         text = f"{article.title or ''} {article.summary or ''}".lower()
+        # Match whole words only: as substrings, "fund" also hits "refund"
+        # and "deal" hits "dealer".
+        words = set(re.findall(r"[a-z0-9]+", text))
+
+        def has(*keywords: str) -> bool:
+            return any(k in text if " " in k else k in words for k in keywords)
         
         # Relevance Scoring
-        if any(w in text for w in ["earnings", "results", "profit", "revenue", "q1", "q2", "q3", "q4"]):
+        if has("earnings", "results", "profit", "revenue", "q1", "q2", "q3", "q4"):
             score += 10
-        elif any(w in text for w in ["acquisition", "buyout", "merger"]):
+        elif has("acquisition", "buyout", "merger"):
             score += 10
-        elif any(w in text for w in ["investment", "stake", "fund"]):
+        elif has("investment", "stake", "fund"):
             score += 9
-        elif any(w in text for w in ["dividend", "bonus", "buyback"]):
+        elif has("dividend", "bonus", "buyback"):
             score += 8
-        elif any(w in text for w in ["contract", "deal", "partnership", "regulatory"]):
+        elif has("contract", "deal", "partnership", "regulatory"):
             score += 8
-        elif any(w in text for w in ["market", "nifty", "sensex", "stocks in news"]):
+        elif has("market", "nifty", "sensex", "stocks in news"):
             score -= 5
         else:
             score += 1 
+
+        # Topic and tag pages also list loosely related stories, so favour
+        # articles that actually name the company.
+        if self._mentions_company(text, words, company, ticker):
+            score += 5
             
         # Source Scoring based on tier
         if article.source_type == "official":
@@ -99,11 +116,27 @@ class CompanyNewsAgent:
             
         return score
 
-    def rank_and_filter_articles(self, articles: list[NewsArticle], top_n: int = 10, max_per_source: int = 5) -> list[NewsArticle]:
+    @staticmethod
+    def _mentions_company(text: str, words: set[str], company: str, ticker: str) -> bool:
+        if ticker and ticker.lower() in words:
+            return True
+        # The leading two words identify the company ("tata motors", "adani
+        # ports"); headlines rarely spell out the full registered name.
+        short_name = " ".join(company.lower().split()[:2])
+        return bool(short_name) and short_name in text
+
+    def rank_and_filter_articles(
+        self,
+        articles: list[NewsArticle],
+        top_n: int = 10,
+        max_per_source: int = 5,
+        company: str = "",
+        ticker: str = "",
+    ) -> list[NewsArticle]:
         # Deduplication happens at dict level in merge_output, here we just rank and limit
         # Store original article with its score dynamically attached for sorting
         for a in articles:
-            a.relevance_score = self.score_article(a)
+            a.relevance_score = self.score_article(a, company, ticker)
             
         # Sort by score descending
         articles.sort(key=lambda x: x.relevance_score, reverse=True)
@@ -132,6 +165,7 @@ class CompanyNewsAgent:
         import json
         import ast
         company = state.get("company_input", "")
+        ticker = state.get("ticker_input") or company
         company_name = company
         
         all_articles_data = []
@@ -155,7 +189,8 @@ class CompanyNewsAgent:
                     continue
                 
                 tool_company = data.get("company")
-                if tool_company and isinstance(tool_company, str) and len(tool_company) > len(company_name):
+                # Symbol tools echo the ticker back; that is not a display name.
+                if tool_company and isinstance(tool_company, str) and tool_company != ticker and len(tool_company) > len(company_name):
                     company_name = tool_company
                     
                 articles = data.get("articles", [])
@@ -182,10 +217,12 @@ class CompanyNewsAgent:
                 continue
                 
         # Rank and filter
-        final_articles = self.rank_and_filter_articles(news_articles, top_n=8, max_per_source=3)
+        final_articles = self.rank_and_filter_articles(
+            news_articles, top_n=8, max_per_source=3, company=company, ticker=ticker
+        )
         
         result = CompanyNews(
-            ticker=company,
+            ticker=ticker,
             company_name=company_name,
             articles=final_articles,
             total_articles=len(final_articles)
@@ -193,11 +230,12 @@ class CompanyNewsAgent:
         
         return {"final_result": result}
 
-    def run(self, company: str) -> CompanyNews:
+    def run(self, company: str, ticker: str | None = None) -> CompanyNews:
         initial_state: AgentMessagesState = {
             "messages": [],
             "final_result": None,
-            "company_input": company
+            "company_input": company,
+            "ticker_input": ticker or company,
         }
         state = self.graph.invoke(initial_state)
         return state["final_result"]

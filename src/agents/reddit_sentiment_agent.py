@@ -1,3 +1,4 @@
+import re
 from langchain_core.messages import ToolMessage
 from langgraph.graph import StateGraph, START, END
 
@@ -52,11 +53,13 @@ class RedditSentimentAgent:
         total_weight = 0
         
         for post in posts:
-            text = f"{post.title} {post.body}".lower()
+            # Whole words only: as substrings, "calls" also hits "recalls"
+            # and "hold" hits "shareholder".
+            words = set(re.findall(r"[a-z]+", f"{post.title} {post.body}".lower()))
             weight = post.score if post.score > 0 else 1
             
-            bull_count = sum(1 for w in bullish_words if w in text)
-            bear_count = sum(1 for w in bearish_words if w in text)
+            bull_count = len(bullish_words & words)
+            bear_count = len(bearish_words & words)
             
             if bull_count > bear_count:
                 total_score += weight

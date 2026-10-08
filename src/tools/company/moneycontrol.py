@@ -2,8 +2,9 @@ import requests
 import urllib.parse
 from langchain_core.tools import tool
 from src.models.company import NewsArticle
+from selectolax.parser import HTMLParser
 from src.tools.common.scraper_utils import (
-    fetch_html, clean_text, absolute_url, deduplicate_articles
+    make_headers, clean_text, absolute_url, deduplicate_articles
 )
 
 ARTICLE_SELECTORS = [".clearfix h2 a", ".news_list li a"]
@@ -15,13 +16,19 @@ def search_moneycontrol_news(company: str) -> dict:
     Search Moneycontrol for company-specific news.
     """
     try:
-        formatted_company = urllib.parse.quote(company.strip())
+        # Moneycontrol tag pages are lowercase hyphenated slugs; a space in the
+        # URL is rejected with 403.
+        formatted_company = urllib.parse.quote(company.strip().lower().replace(" ", "-"))
         url = f"https://www.moneycontrol.com/news/tags/{formatted_company}.html"
         
-        parser = fetch_html(url)
-        if not parser:
-            raise requests.RequestException("Failed to fetch or parse HTML")
-            
+        response = requests.get(url, headers=make_headers(), timeout=10)
+        response.raise_for_status()
+        # An unknown tag redirects to the generic /news/ front page. Those
+        # headlines are not about this company, so treat it as no results.
+        if "/news/tags/" not in response.url:
+            return {"company": company, "articles": []}
+
+        parser = HTMLParser(response.content)
         articles = []
         
         nodes = parser.css(".clearfix a")

@@ -1,55 +1,72 @@
-import requests
-from bs4 import BeautifulSoup
 from langchain_core.tools import tool
+from src.tools.common.yahoo_finance import get_latest_quote
+
+# Yahoo symbol -> display name of the NSE sector index used as the benchmark.
+_INDEX_NAMES = {
+    "^CNXAUTO": "Nifty Auto",
+    "^NSEBANK": "Nifty Bank",
+    "^CNXMETAL": "Nifty Metal",
+    "^CNXINFRA": "Nifty Infrastructure",
+    "^CNXIT": "Nifty IT",
+    "NIFTY_FIN_SERVICE.NS": "Nifty Financial Services",
+    "^CNXCONSUM": "Nifty India Consumption",
+    "^CNXFMCG": "Nifty FMCG",
+    "^CNXPHARMA": "Nifty Pharma",
+    "^CNXENERGY": "Nifty Energy",
+    "^CNXCMDT": "Nifty Commodities",
+    "^CNXREALTY": "Nifty Realty",
+    "^CNXMEDIA": "Nifty Media",
+}
+
+# Yahoo's sectors are broader than NSE's indices ("Consumer Cyclical" covers
+# both carmakers and retailers), so the industry is checked first.
+_INDUSTRY_KEYWORD_INDEX = [
+    ("auto", "^CNXAUTO"),
+    ("bank", "^NSEBANK"),
+    ("steel", "^CNXMETAL"),
+    ("metal", "^CNXMETAL"),
+    ("alumin", "^CNXMETAL"),
+    ("copper", "^CNXMETAL"),
+    ("telecom", "^CNXINFRA"),
+]
+
+_SECTOR_INDEX = {
+    "technology": "^CNXIT",
+    "financial services": "NIFTY_FIN_SERVICE.NS",
+    "consumer cyclical": "^CNXCONSUM",
+    "consumer defensive": "^CNXFMCG",
+    "healthcare": "^CNXPHARMA",
+    "energy": "^CNXENERGY",
+    "utilities": "^CNXENERGY",
+    "basic materials": "^CNXCMDT",
+    "industrials": "^CNXINFRA",
+    "real estate": "^CNXREALTY",
+    "communication services": "^CNXMEDIA",
+}
+
+
+def _benchmark_index(sector: str, industry: str) -> str | None:
+    industry_l = industry.lower()
+    for keyword, symbol in _INDUSTRY_KEYWORD_INDEX:
+        if keyword in industry_l:
+            return symbol
+    return _SECTOR_INDEX.get(sector.lower().strip())
 
 
 @tool
-def get_sector_performance(sector: str) -> dict:
+def get_sector_performance(sector: str, industry: str = "") -> dict:
     """
-    Fetch sector performance.
+    Fetch today's move of the NSE sector index that best matches a company's
+    sector/industry. 'performance' is None when no index matches or the quote
+    is unavailable.
     """
-    try:
-        # A simple fallback scraper for sector performance
-        url = "https://www.moneycontrol.com/stocks/marketstats/sector-scan/bse/today.html"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, "html.parser")
-        tables = soup.find_all("table", class_="mctable1")
-        
-        performance = 0.0
-        leader = "Unknown"
-        
-        # This is a very rudimentary fallback mapping to extract real data.
-        # Ideally, we would map the exact sector name to Moneycontrol's sector list.
-        if tables:
-            rows = tables[0].find_all("tr")[1:5]
-            for row in rows:
-                cols = row.find_all("td")
-                if len(cols) > 2:
-                    sector_name = cols[0].text.strip()
-                    if sector.lower() in sector_name.lower():
-                        perf_text = cols[2].text.strip().replace("%", "")
-                        performance = float(perf_text) if perf_text else 0.0
-                        a_tag = cols[0].find("a")
-                        leader = a_tag.text.strip() if a_tag else sector_name
-                        break
-        
-        return {
-            "sector": sector,
-            "performance": performance,
-            "leader": leader,
-            "source": "Moneycontrol Sector Scan"
-        }
-    except requests.RequestException:
-        # Graceful degradation on network failures
-        return {
-            "sector": sector,
-            "performance": 0.0,
-            "leader": "Unknown",
-            "source": "Moneycontrol Sector Scan"
-        }
+    symbol = _benchmark_index(sector, industry)
+    quote = get_latest_quote(symbol) if symbol else None
+
+    return {
+        "sector": sector,
+        "industry": industry,
+        "index": _INDEX_NAMES[symbol] if symbol else None,
+        "performance": round(quote["change_percent"], 2) if quote else None,
+        "source": "Yahoo Finance",
+    }

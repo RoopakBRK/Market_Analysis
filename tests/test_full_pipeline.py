@@ -1,4 +1,5 @@
 import json
+import pytest
 from src.graph.state import GraphState
 from src.graph.workflow import graph
 from src.llm.gateway import print_usage_stats
@@ -55,8 +56,8 @@ def main():
     print("==================================================")
     report = result.get("report")
     if report:
-        print(f"Date: {report.report_date}")
-        print(f"Executive Summary: {report.executive_summary}")
+        print(f"Date: {report.date}")
+        print(f"Final Market View: {report.final_market_view}")
         print(f"Top Positive Stocks: {len(report.top_positive_stocks)}")
         print(f"Top Negative Stocks: {len(report.top_negative_stocks)}")
     else:
@@ -68,6 +69,11 @@ def main():
     
     # Print the instrumentation stats
     print_usage_stats()
+
+@pytest.mark.live
+def test_full_pipeline():
+    main()
+
 
 if __name__ == "__main__":
     main()
