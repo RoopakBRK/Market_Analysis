@@ -37,8 +37,9 @@ class CompanyIntelligence(BaseModel):
     # How today's macro environment affects this company.
     macro_relevance: Optional[str] = None
 
-    # Passages retrieved from the 20-year price-history store (src/rag).
-    # Empty when the store is not configured.
+    # Lines computed from the 20-year price-history store (src/rag): comparable
+    # past sessions, precedents, seasonality, year context. Empty when the store
+    # is not configured.
     historical_context: StringList = Field(default_factory=list)
 
     # Final synthesised interpretation for this company.

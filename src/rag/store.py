@@ -10,7 +10,7 @@ DENSE_VECTOR = "dense"
 SPARSE_VECTOR = "bm25"
 
 # Payload fields used as filters, and the index type each needs.
-_PAYLOAD_INDEXES = {"ticker": "keyword", "granularity": "keyword", "year": "integer"}
+_PAYLOAD_INDEXES = {"ticker": "keyword", "granularity": "keyword", "year": "integer", "month": "integer"}
 
 
 def get_client():

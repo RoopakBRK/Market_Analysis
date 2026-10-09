@@ -1,44 +1,92 @@
+from datetime import date
+
 from src.models.market import MarketData
+from src.rag import history_stats as stats
 
 # A session move at least this large (percent) is worth looking up precedents for.
 _NOTABLE_MOVE_PCT = 2.0
+_PRECEDENTS = 3
+
+_MONTH_FIELDS = ["year", "month", "period_start", "in_progress", "return_pct", "sessions"]
+_YEAR_FIELDS = ["year", "period_start", "period_end", "in_progress", "return_pct", "index_return_pct"]
 
 
 class HistoricalContextAgent:
     """
-    Retrieves passages about a company from the 20-year price-history store
-    (src/rag) to put today's session in context.
+    Puts today's session in context using the 20-year price-history store
+    (src/rag). For one company it produces up to four kinds of line:
 
-    No LLM is used: the query is built from today's market data and the
-    passages come back verbatim from the store. Returns [] when the store is
-    not configured, so the pipeline runs unchanged without it.
+      - Comparable sessions: what followed past sessions of today's size,
+        against how the stock does after any session
+      - Precedent: the three closest past sessions, one per distinct episode
+      - Seasonality: how the stock did in this calendar month in past years
+      - Year context: this year so far against its own history and the index
+
+    No LLM is used. Past sessions are selected by the size of the move, not
+    by text similarity, and every figure is computed in code from the stored
+    daily prices and returns, so the lines can be quoted as fact. Returns []
+    when the store is not configured, so the pipeline runs unchanged without it.
     """
 
-    def __init__(self, retriever=None):
-        self._retriever = retriever
-        self._resolved = retriever is not None
+    def __init__(self, reader=None):
+        self._reader = reader
+        self._resolved = reader is not None
 
     @property
-    def retriever(self):
-        # Resolved on first use, not at import: building it loads the
-        # embedding models, which is wasted work when Qdrant isn't configured.
+    def reader(self):
+        # Resolved on first use, so importing the pipeline does not touch the
+        # network when Qdrant isn't configured.
         if not self._resolved:
-            from src.rag.retriever import get_retriever
-            self._retriever = get_retriever()
+            from src.rag.reader import get_reader
+            self._reader = get_reader()
             self._resolved = True
-        return self._retriever
+        return self._reader
+
+    def run(
+        self,
+        ticker: str,
+        company: str,
+        market: MarketData | None = None,
+        as_of: date | None = None,
+    ) -> list[str]:
+        reader = self.reader
+        if reader is None:
+            return []
+        as_of = as_of or date.today()
+
+        months = reader.scan(ticker, "month", fields=_MONTH_FIELDS)
+        years = reader.scan(ticker, "year", fields=_YEAR_FIELDS)
+        if not months and not years:
+            return []
+
+        closes = stats.closes_from_months(months)
+        move = market.day_change_percent if market is not None else None
+
+        lines = []
+        if move is not None and abs(move) >= _NOTABLE_MOVE_PCT and not closes.empty:
+            lines += self._session_lines(reader, ticker, closes, move)
+
+        for line in (
+            stats.seasonality(ticker, months, as_of.month),
+            stats.year_context(ticker, years),
+            stats.staleness_note(closes, as_of),
+        ):
+            if line:
+                lines.append(line)
+        return lines
 
     @staticmethod
-    def build_query(company: str, market: MarketData | None) -> str:
-        """Describe today's session in the same terms the stored chunks use."""
-        move = market.day_change_percent if market is not None else None
-        if move is not None and abs(move) >= _NOTABLE_MOVE_PCT:
-            direction = "rose" if move > 0 else "fell"
-            return f"{company} {direction} {abs(move):.1f}% in a single session and what followed"
-        return f"{company} recent monthly performance against the NIFTY 50"
+    def _session_lines(reader, ticker: str, closes, move: float) -> list[str]:
+        lines = []
 
-    def run(self, ticker: str, company: str, market: MarketData | None = None, limit: int = 3) -> list[str]:
-        if self.retriever is None:
-            return []
-        hits = self.retriever.search(self.build_query(company, market), ticker=ticker, limit=limit)
-        return [hit.text for hit in hits]
+        comparable = stats.comparable_sessions(closes, move)
+        if comparable is not None:
+            lines.append(stats.format_comparable(ticker, move, comparable))
+
+        closest = stats.precedents(closes, move, count=_PRECEDENTS)
+        # Sessions of 4% or more have their own stored chunk, which adds the
+        # index move and volume; smaller ones are described from the prices alone.
+        events = reader.events(ticker, [p.day.strftime("%Y-%m-%d") for p in closest])
+        for precedent in closest:
+            lines.append(stats.format_precedent(ticker, precedent, events.get(precedent.day.strftime("%Y-%m-%d"))))
+        return lines

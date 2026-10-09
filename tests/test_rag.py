@@ -13,8 +13,6 @@ import pandas as pd
 import pytest
 from qdrant_client import QdrantClient
 
-from src.agents.historical_context_agent import HistoricalContextAgent
-from src.models.market import MarketData
 from src.rag.chunking import EVENT_THRESHOLD_PCT, build_chunks, chunk_id, period_returns
 from src.rag.retriever import HistoryRetriever
 from src.rag.store import ensure_collection, upsert_chunks
@@ -247,32 +245,3 @@ def test_reranker_reorders_the_fused_candidates(store):
     assert reranker.calls == 1
     assert "fell 10.0% in a single session" in hits[0].text
     assert hits[0].score > hits[1].score
-
-
-# ── Pipeline agent ───────────────────────────────────────────────────────────
-
-def test_query_describes_a_notable_session():
-    build = HistoricalContextAgent.build_query
-
-    assert build("Acme", MarketData(day_change_percent=-3.53)) == "Acme fell 3.5% in a single session and what followed"
-    assert build("Acme", MarketData(day_change_percent=2.0)) == "Acme rose 2.0% in a single session and what followed"
-    quiet = "Acme recent monthly performance against the NIFTY 50"
-    assert build("Acme", MarketData(day_change_percent=0.4)) == quiet
-    assert build("Acme", None) == quiet
-
-
-def test_agent_returns_passages_for_its_ticker(store):
-    client, embedder, _ = store
-    agent = HistoricalContextAgent(HistoryRetriever(client, embedder, collection="test"))
-
-    passages = agent.run("ACME", "Acme Industries", MarketData(day_change_percent=-5.0), limit=2)
-
-    assert len(passages) == 2
-    assert all(p.startswith("Acme Industries (ACME) on NSE") for p in passages)
-
-
-def test_agent_is_a_no_op_without_a_store(monkeypatch):
-    import src.rag.retriever as retriever_module
-
-    monkeypatch.setattr(retriever_module, "get_retriever", lambda: None)
-    assert HistoricalContextAgent().run("ACME", "Acme Industries") == []

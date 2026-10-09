@@ -22,8 +22,10 @@ Critical Rules:
   and never restate a number in a different format.
 - A source marked as unavailable provided no data: do not describe a signal from it.
 - When day-over-day changes are given, say what changed since the previous close or run.
-- Historical context passages describe past periods. Use them only as precedent for
-  today's move, name the period they refer to, and never present them as a forecast.
+- Historical context lines are statistics and precedents computed from past prices. Cite their
+  figures exactly, name the period or sample they refer to, use them only as context for
+  today's move, and never present them as a forecast. A past share such as "higher in 58%"
+  describes what happened before, not what will happen.
 - Use each company's ticker exactly as given.
 - Maintain a professional, objective tone.
 - Base your analysis strictly on the provided context.

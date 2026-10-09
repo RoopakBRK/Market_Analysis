@@ -174,7 +174,12 @@ python -m src.rag.query "How did Adani Ports do in March 2020?"
 ```
 
 Without `QDRANT_URL` the pipeline logs `[RAG] Skipped` and runs as before.
-The chunking, embedding and reranking design is described in `structure.md`.
+The report's "Historical Context" shows, for each company, how it behaved after
+past sessions of today's size (against its behaviour after any session), the
+closest precedents, how it has done in this calendar month in past years, and
+this year against its own history and the NIFTY 50. All of it is computed from
+the stored prices. The chunking, embedding and reranking design is described in
+`structure.md`.
 
 ### Reddit is optional
 

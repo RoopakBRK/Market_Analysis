@@ -6,7 +6,7 @@ This is a **multi-agent market intelligence system** built with **LangGraph** an
 Given a watchlist of stock tickers it spins up a directed acyclic graph of specialised agents that:
 
 1. Run **in parallel** to collect data from diverse sources (news feeds, exchange filings, Yahoo Finance, Reddit, Tavily news search)
-2. Look up **historical precedent** for each stock in a 20-year price-history store (Qdrant RAG)
+2. Put each stock's day in **historical context** using a 20-year price-history store (Qdrant RAG)
 3. Converge into a **SentimentAgent** that synthesises per-ticker sentiment
 4. Produce a single **DailyMarketReport** via the **ReportAgent**, including a **day-over-day comparison**
 5. **Fact-check** the report's commentary against the facts with a second model, removing anything unsupported
@@ -45,7 +45,7 @@ Market Analysis/
 │   │   ├── company_news_agent.py
 │   │   ├── fact_check_agent.py           # Removes unsupported commentary from the report
 │   │   ├── financial_data_agent.py
-│   │   ├── historical_context_agent.py   # Retrieves precedents from the RAG store
+│   │   ├── historical_context_agent.py   # Statistics and precedents from the RAG store
 │   │   ├── macro_agent.py
 │   │   ├── market_data_agent.py
 │   │   ├── reddit_sentiment_agent.py
@@ -62,9 +62,11 @@ Market Analysis/
 │   │   ├── universe.py              # Which companies: live NIFTY 50 list from NSE + watchlist
 │   │   ├── loader.py                # 20 years of daily bars via yfinance
 │   │   ├── chunking.py              # Calendar-window chunking: year / month / event
+│   │   ├── history_stats.py         # Statistics computed from stored prices (no LLM)
+│   │   ├── reader.py                # Exact reads: scan a ticker's chunks, fetch events by id
 │   │   ├── embeddings.py            # Dense, sparse and reranker models (fastembed, local)
 │   │   ├── store.py                 # Qdrant client, collection schema, upserts
-│   │   ├── retriever.py             # Hybrid search + RRF fusion + cross-encoder rerank
+│   │   ├── retriever.py             # Hybrid search + RRF fusion + cross-encoder rerank (query CLI)
 │   │   ├── ingest.py                # CLI: build / refresh the store
 │   │   └── query.py                 # CLI: retrieve + LLM answer
 │   │
@@ -341,22 +343,37 @@ Skipped when Reddit credentials are not configured.
 ---
 
 ### 6. `HistoricalContextAgent`
-**File:** `src/agents/historical_context_agent.py`
+**File:** `src/agents/historical_context_agent.py` (statistics in `src/rag/history_stats.py`)
 
 **What it does:**
-Puts today's session in context using the 20-year price-history store. It builds a query from today's
-market data and asks the RAG retriever for the three most relevant passages for that ticker:
+Puts today's session in context using the 20-year price-history store. For each company it reads that
+company's chunks **exactly, by ticker and level**, not by text similarity, and computes up to four kinds
+of line. Every figure is arithmetic on the stored prices and returns, done in code, so each line can be
+quoted as fact.
 
-- If the stock moved **2% or more** today: `"<Company> fell 3.5% in a single session and what followed"`
-  — which surfaces comparable past sessions and their 5- and 20-session follow-through.
-- Otherwise: `"<Company> recent monthly performance against the NIFTY 50"`.
+| Line | Built from | What it says |
+|---|---|---|
+| **Comparable sessions** | the raw daily bars stored in every `month` chunk (the full 20-year close series) | Past sessions whose move was within ±25% of today's, same direction (a 3.5% fall matches falls of 2.6–4.4%): how many, across how many years, and how often the stock was higher 5 and 20 sessions later (and the median), **against the same share across all sessions** |
+| **Precedent** (up to 3) | the same series, plus the matching `event` chunk when one exists | The closest past sessions by size of move, at most one per 20 sessions so they are separate episodes, with the 5- and 20-session follow-through. Sessions of 4% or more also show the NIFTY 50's move and the volume, read from their stored event chunk |
+| **Seasonality** | `month` chunks for the current calendar month | In how many past Octobers (say) the stock rose, the median, and the best and worst year |
+| **Year context** | `year` chunks | This year to date against the stock's own completed years (median, range) and the NIFTY 50, and in how many years it beat the index |
 
-The passages are returned **verbatim** (their figures were computed in code at ingestion time) and
-appear in the report under "Historical Context" and in the ReportAgent's prompt.
+Rules that keep the numbers honest:
+- The comparable-session and precedent lines appear only when today's move is **2% or more**; on a quiet
+  day only seasonality and year context are produced.
+- Fewer than **15** comparable sessions is reported as too few for statistics, not turned into a percentage.
+- The part-year and part-month in which a stock listed are not counted as full years or months.
+- If the store's last session is more than 4 days old, a note says so and to re-run the ingest.
+- The baseline matters: a stock being "higher after 52% of such sessions" means little if it is higher
+  after 51% of all sessions, and the line says both.
+
+Uses no embedding model, so it adds no model loading to a pipeline run (about 1–2 seconds per company).
+Semantic search (`src/rag/retriever.py`) is still used by the `python -m src.rag.query` command.
 
 **Uses LLM?** ❌ No. **Skipped** (returns nothing) when `QDRANT_URL` is not configured.
 
-**Output:** `historical_context: dict[ticker, list[str]]` in graph state.
+**Output:** `historical_context: dict[ticker, list[str]]` in graph state, shown in the report under
+"Historical Context" and given to the ReportAgent and the FactCheckAgent as facts.
 
 ---
 
@@ -583,6 +600,16 @@ lookups only ever see the company in question.
 **Known limit:** the rerankers judge text relevance, not arithmetic. A superlative such as
 "worst year for Adani Ports" returns relevant year chunks but not reliably the numerically worst
 one; such questions are better answered by sorting on the `return_pct` payload.
+
+### Two ways to read the store
+
+| | Used by | How it picks chunks |
+|---|---|---|
+| **Semantic search** (`retriever.py`): dense + BM25, RRF, cross-encoder rerank | `python -m src.rag.query` | Meaning and wording of a free-text question |
+| **Exact reads** (`reader.py`): scroll by `ticker` + `granularity`, fetch by id | `HistoricalContextAgent` in the pipeline | Payload fields, so the pipeline's statistics use *all* of a company's data, not the top few matches |
+
+The pipeline uses exact reads because its questions are numeric ("sessions like today's") and an
+embedding model matches the wording of a chunk, not the size of its number.
 
 ### Commands
 
