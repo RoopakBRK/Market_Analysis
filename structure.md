@@ -5,7 +5,7 @@
 This is a **multi-agent market intelligence system** built with **LangGraph** and **LangChain**.
 Given a watchlist of stock tickers it spins up a directed acyclic graph of specialised agents that:
 
-1. Run **in parallel** to collect data from diverse sources (news feeds, exchange filings, Yahoo Finance, Reddit, Tavily news search)
+1. Run **in parallel** to collect data from diverse sources (news feeds, exchange filings, Yahoo Finance, Reddit, Tavily and Firecrawl news search)
 2. Put each stock's day in **historical context** using a 20-year price-history store (Qdrant RAG)
 3. Converge into a **SentimentAgent** that synthesises per-ticker sentiment
 4. Produce a single **DailyMarketReport** via the **ReportAgent**, including a **day-over-day comparison**
@@ -73,12 +73,12 @@ Market Analysis/
 │   ├── tools/                       # LangChain @tool-decorated data fetchers
 │   │   ├── common/                  # Shared utility functions
 │   │   │   ├── normalization.py     # utc_now_iso(), deduplicate_article_dicts()
-│   │   │   ├── source_classifier.py # Classifies a source into a reliability tier
+│   │   │   ├── source_classifier.py # Classifies a source into a reliability tier; names a publisher from a URL
 │   │   │   ├── scraper_utils.py     # HTTP scraping helpers (headers, HTML fetch)
 │   │   │   ├── yahoo_finance.py     # Quotes, daily bars, sector lookup, NSE symbol mapping
 │   │   │   ├── google_news.py       # Google News RSS search (dated, per-publisher)
 │   │   │   ├── citations.py         # (empty placeholder)
-│   │   │   ├── date_utils.py        # (empty placeholder)
+│   │   │   ├── date_utils.py        # Parses publication dates ("3 hours ago", ISO, RFC 2822)
 │   │   │   └── deduplicate.py       # (empty placeholder)
 │   │   │
 │   │   ├── company/                 # Company-specific news sources
@@ -88,6 +88,12 @@ Market Analysis/
 │   │   │   ├── moneycontrol.py      # Moneycontrol tag page
 │   │   │   ├── nse.py               # NSE corporate announcements API
 │   │   │   └── reuters.py           # Reuters, via Google News
+│   │   │
+│   │   ├── firecrawl/               # Firecrawl news search and article scraping
+│   │   │   ├── client.py            # News search with an enforced date window; article → plain text
+│   │   │   ├── article_content.py   # Replaces thin summaries with the opening of the article
+│   │   │   ├── company_news.py
+│   │   │   └── macro_news.py
 │   │   │
 │   │   ├── financial_api/           # Structured financial data via external API (stub)
 │   │   │   ├── client.py
@@ -231,10 +237,13 @@ dated context but not stored there. `last_updated` is set in code.
 | `get_us_market_summary` | `tools/macro/us_market.py` | S&P 500, Nasdaq, Dow |
 | `get_india_market_summary` | `tools/macro/india_market.py` | Nifty 50 and Sensex: level, previous close, change |
 | `get_usd_inr_rate` | `tools/macro/usd_inr.py` | USD/INR exchange rate |
-| `get_inflation_data` | `tools/macro/inflation.py` | Recent CPI / WPI news articles (35-day window) |
+| `get_inflation_data` | `tools/macro/inflation.py` | Recent CPI / WPI news articles from Firecrawl and Tavily (35-day window) |
 | `get_gold_price` | `tools/macro/gold.py` | Gold price and trend |
 | `get_rbi_updates` | `tools/macro/rbi.py` | Live repo rate, SDF, MSF, bank rate, CRR, SLR from rbi.org.in |
 | `search_macro_news_tavily` | `tools/tavily/macro_news.py` | Tavily news search for macro news |
+| `search_macro_news_firecrawl` | `tools/firecrawl/macro_news.py` | Firecrawl news search for macro news (3-day window, enforced in code) |
+
+An article that both searches return is shown to the LLM once.
 
 **Output model:** `MacroSummary` (`src/models/macro.py`)
 
@@ -244,9 +253,15 @@ dated context but not stored there. `last_updated` is set in code.
 **File:** `src/agents/company_news_agent.py`
 
 **What it does:**
-Collects news for a single company from 7 sources simultaneously, deduplicates by URL and
+Collects news for a single company from 8 sources simultaneously, deduplicates by URL and
 title+source, scores each article by relevance and source tier, and returns the top 8. News sources
 are searched by **company name**; exchange-filing sources by **NSE symbol**.
+
+When Firecrawl is configured, a final step reads up to `FIRECRAWL_SCRAPE_TOP_N` of those articles in
+full and replaces a missing or one-line summary with the opening of the article (and fills in a
+missing publication date). It runs after ranking, since ranking scores keywords in the summary.
+Exchange filings are not read. A Google News redirect link (the Reuters and Mint headlines) is
+followed to the article, and replaced by the publisher's own URL.
 
 **Uses LLM?** ❌ No — fully deterministic keyword scoring.
 
@@ -268,6 +283,7 @@ are searched by **company name**; exchange-filing sources by **NSE symbol**.
 | `get_nse_announcements` | `tools/company/nse.py` | NSE corporate announcements (last 7 days, routine filings skipped) |
 | `get_investor_relations` | `tools/company/investor_relations.py` | Press releases, results, investor meets from NSE filings (30 days) |
 | `search_company_news_tavily` | `tools/tavily/company_news.py` | Tavily news search (3-day window, enforced in code) |
+| `search_company_news_firecrawl` | `tools/firecrawl/company_news.py` | Firecrawl news search (3-day window, enforced in code) |
 
 **Output model:** `CompanyNews` with a list of `NewsArticle` (`src/models/company.py`)
 
@@ -673,14 +689,16 @@ as an error rather than an answer. The SDK does its own retrying, so the gateway
 | `ANTHROPIC_FALLBACK_MODEL` | Claude model id (default `claude-opus-5-5`) |
 | `ANTHROPIC_MAX_TOKENS` | Output cap for Claude calls, covering thinking and answer (default 16000) |
 | `TAVILY_API_KEY` | Tavily news-search API key |
+| `FIRECRAWL_API_KEY` | Firecrawl API key for news search and article scraping (optional) |
+| `FIRECRAWL_SCRAPE_TOP_N` | Articles per company read in full, one credit each (default 5; 0 = search only) |
 | `FINANCIAL_AGENT_API_KEY` + `FINANCIAL_AGENT_BASE_URL` | External financial data provider (stub) |
 | `REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET` | Reddit PRAW OAuth credentials (optional) |
 | `QDRANT_URL` + `QDRANT_API_KEY` | Qdrant cluster for the price-history RAG (optional) |
 | `QDRANT_COLLECTION` | Collection name (default `nifty_price_history`) |
 | `DATABASE_URL` | PostgreSQL connection string (optional) |
 
-Reddit, Qdrant, PostgreSQL and the Anthropic fallback are each optional: leave them unset and the
-pipeline skips that part.
+Firecrawl, Reddit, Qdrant, PostgreSQL and the Anthropic fallback are each optional: leave them unset
+and the pipeline skips that part.
 
 ---
 
@@ -688,8 +706,8 @@ pipeline skips that part.
 
 | Agent | LLM? | # Tools | Output Model |
 |---|---|---|---|
-| `MacroAgent` | ✅ 1 call | 9 (7 macro + inflation news + Tavily) | `MacroSummary` |
-| `CompanyNewsAgent` | ❌ | 7 (6 sources + Tavily) | `CompanyNews` |
+| `MacroAgent` | ✅ 1 call | 10 (7 macro + inflation news + Tavily + Firecrawl) | `MacroSummary` |
+| `CompanyNewsAgent` | ❌ | 8 (6 sources + Tavily + Firecrawl) | `CompanyNews` |
 | `MarketDataAgent` | ❌ | 3 (price, indicators, sector) | `MarketData` |
 | `FinancialDataAgent` | ❌ | 3 (profile, metrics, events) | `CompanyFinancials` |
 | `RedditSentimentAgent` | ❌ | 1 (Reddit posts) | `RedditSignal` |

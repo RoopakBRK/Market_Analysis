@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_core.messages import ToolMessage
 from langgraph.graph import StateGraph, START, END
 
+from config.settings import settings
 from src.models.company import CompanyNews, NewsArticle
 from src.graph.messages_state import AgentMessagesState
 
@@ -12,6 +13,8 @@ from src.tools.company.mint import search_mint_news
 from src.tools.company.moneycontrol import search_moneycontrol_news
 from src.tools.company.nse import get_nse_announcements
 from src.tools.company.reuters import search_reuters_news
+from src.tools.firecrawl.article_content import enrich_articles
+from src.tools.firecrawl.company_news import search_company_news_firecrawl
 from src.tools.tavily.company_news import search_company_news_tavily
 from src.tools.common.normalization import deduplicate_article_dicts
 from src.tools.common.source_classifier import classify_source
@@ -24,6 +27,7 @@ TOOLS = [
     get_nse_announcements,
     get_investor_relations,
     search_company_news_tavily,
+    search_company_news_firecrawl,
 ]
 
 # Tools that look a company up by its NSE symbol rather than by name.
@@ -36,10 +40,12 @@ class CompanyNewsAgent:
 
         builder.add_node("collect_data_node", self.collect_data)
         builder.add_node("merge_node", self.merge_output)
+        builder.add_node("enrich_node", self.enrich_output)
 
         builder.add_edge(START, "collect_data_node")
         builder.add_edge("collect_data_node", "merge_node")
-        builder.add_edge("merge_node", END)
+        builder.add_edge("merge_node", "enrich_node")
+        builder.add_edge("enrich_node", END)
 
         self.graph = builder.compile()
 
@@ -205,6 +211,11 @@ class CompanyNewsAgent:
                             a["is_official"] = (a["source_type"] == "official")
                             all_articles_data.append(a)
         
+        # Tools finish in no fixed order. Put the articles that carry a summary
+        # and a date first, so that when two tools return the same URL the
+        # fuller copy is the one deduplication keeps.
+        all_articles_data.sort(key=lambda a: (not a.get("summary"), not a.get("published_at")))
+
         # Deduplicate deterministically by URL / Title+Source
         deduped_dicts = deduplicate_article_dicts(all_articles_data)
 
@@ -229,6 +240,16 @@ class CompanyNewsAgent:
         )
         
         return {"final_result": result}
+
+    def enrich_output(self, state: AgentMessagesState):
+        """Read the top-ranked articles in full through Firecrawl, where it is configured."""
+        result = state["final_result"]
+        if result is None:
+            return {}
+        # After ranking, not before: ranking scores keywords in the summary,
+        # and a full article body would match most of them.
+        articles = enrich_articles(result.articles, limit=settings.FIRECRAWL_SCRAPE_TOP_N)
+        return {"final_result": result.model_copy(update={"articles": articles})}
 
     def run(self, company: str, ticker: str | None = None) -> CompanyNews:
         initial_state: AgentMessagesState = {

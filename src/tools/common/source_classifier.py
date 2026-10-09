@@ -11,6 +11,7 @@ These are deterministic rules — no LLM.
 """
 
 from typing import Literal
+from urllib.parse import urlparse
 
 SourceType = Literal["official", "tier1", "tier2", "tavily"]
 
@@ -31,7 +32,8 @@ _TIER1_SOURCES = {
     "reuters",
     "bloomberg",
     "associated press",
-    "ap",
+    "ap news",
+    "apnews",
     "financial times",
     "wsj",
     "wall street journal",
@@ -51,6 +53,40 @@ _TIER2_SOURCES = {
     "businessline",
     "financial express",
 }
+
+
+# Publisher domain → the name the dedicated tools give that publisher, so an
+# article found through a search API is labelled, tiered and capped per
+# source the same way as one found by the publisher's own tool.
+_PUBLISHER_DOMAINS = {
+    "reuters.com": "Reuters",
+    "bloomberg.com": "Bloomberg",
+    "apnews.com": "Associated Press",
+    "ft.com": "Financial Times",
+    "wsj.com": "Wall Street Journal",
+    "economictimes.indiatimes.com": "Economic Times",
+    "economictimes.com": "Economic Times",
+    "moneycontrol.com": "Moneycontrol",
+    "livemint.com": "Mint",
+    "business-standard.com": "Business Standard",
+    "ndtvprofit.com": "NDTV Profit",
+    "cnbctv18.com": "CNBC TV18",
+    "thehindubusinessline.com": "The Hindu BusinessLine",
+    "financialexpress.com": "Financial Express",
+}
+
+
+def publisher_from_url(url: str) -> str:
+    """
+    Return the publisher's name for an article URL: the canonical name for a
+    known publisher, otherwise the bare domain. Returns "" if the URL has no
+    host.
+    """
+    host = urlparse(url or "").netloc.lower().removeprefix("www.")
+    for domain, name in _PUBLISHER_DOMAINS.items():
+        if host == domain or host.endswith("." + domain):
+            return name
+    return host
 
 
 def classify_source(source: str) -> SourceType:

@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # ── Tavily ───────────────────────────────────────────────────────────────
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
 
+    # ── Firecrawl (news search + full-text article scraping) ─────────────────
+    # Leave the key blank to run without Firecrawl; news then comes from the
+    # publisher scrapers, Google News and Tavily alone.
+    FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
+    # How many of each company's top-ranked articles are read in full to
+    # replace a missing or one-line summary, at one Firecrawl credit each.
+    # 0 turns article scraping off and leaves Firecrawl search on.
+    FIRECRAWL_SCRAPE_TOP_N: int = int(os.getenv("FIRECRAWL_SCRAPE_TOP_N", "5"))
+
     # ── Financial Agent API ──────────────────────────────────────────────────
     # NOTE: The Financial Agent API provider is not yet confirmed.
     # The key is read here; the adapter stub will use it when the real

@@ -28,6 +28,7 @@ pyright
 langchain-groq
 datetime
 tavily-python
+firecrawl-py
 praw
 yfinance
 qdrant-client

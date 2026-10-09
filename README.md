@@ -31,8 +31,8 @@ The system focuses on **daily news-driven sentiment**, not stock-price predictio
 
 ```
 START
-  ├── MacroAgent            → Macroeconomic signals + Tavily news
-  ├── CompanyNewsAgent      → Parallel news retrieval (Reuters, ET, NSE, Tavily...)
+  ├── MacroAgent            → Macroeconomic signals + Tavily / Firecrawl news
+  ├── CompanyNewsAgent      → Parallel news retrieval (Reuters, ET, NSE, Tavily, Firecrawl...)
   ├── MarketDataAgent       → Price, RSI, MACD, VWAP, sector index via Yahoo Finance
   ├── FinancialDataAgent    → PE, EPS, Revenue, upcoming events
   └── RedditSentimentAgent  → Community sentiment (r/IndiaInvestments etc.)
@@ -102,6 +102,10 @@ ANTHROPIC_FALLBACK_API_KEY=your_anthropic_key
 
 # Tavily — web/news retrieval
 TAVILY_API_KEY=your_tavily_key
+
+# Firecrawl — news search + full-text article scraping (optional — pipeline continues without it)
+FIRECRAWL_API_KEY=fc-your_firecrawl_key
+# FIRECRAWL_SCRAPE_TOP_N=5         # articles per company read in full; 0 = search only
 
 # Financial Agent API (optional — stub until provider is confirmed)
 FINANCIAL_AGENT_API_KEY=your_key
@@ -181,6 +185,31 @@ this year against its own history and the NIFTY 50. All of it is computed from
 the stored prices. The chunking, embedding and reranking design is described in
 `structure.md`.
 
+### Firecrawl (optional)
+
+With `FIRECRAWL_API_KEY` set, [Firecrawl](https://www.firecrawl.dev) does two
+things:
+
+- **Searches news** for each company and for the macro picture, next to Tavily.
+- **Reads the top articles in full.** After ranking, up to
+  `FIRECRAWL_SCRAPE_TOP_N` (default 5) of each company's articles that have no
+  summary, or only a one-line snippet, are scraped, and the opening of the
+  article becomes the summary the SentimentAgent reads. That includes the
+  Reuters and Mint headlines from Google News: Firecrawl follows the redirect
+  link, so they gain the article text and the publisher's own URL. A missing
+  publication date is filled in from the page.
+
+Without the key the pipeline logs `[Firecrawl] Skipped` once and runs as
+before. A failed call (rate limit, credits used up, blocked page) is logged
+and the article or search it was for is simply left as it was.
+
+Cost, at Firecrawl's October 2026 rates of 2 credits per search and 1 per
+article read: each company takes 1 search and up to
+`FIRECRAWL_SCRAPE_TOP_N` reads, and the macro side takes 2 searches — at
+most 18 credits a run for the two-company watchlist. The free plan allows 10
+searches and 10 scrapes a minute, so a longer watchlist will run into the
+scrape limit and needs a paid plan.
+
 ### Reddit is optional
 
 If `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` are left blank in `.env`,
@@ -198,7 +227,7 @@ pytest tests/ -m live -v -s      # live checks: real APIs, needs the keys in .en
 ```
 
 > The default run is fully offline — external calls are mocked. Tests that
-> call real services (scrapers, Tavily, the LLM, the full pipeline) are
+> call real services (scrapers, Tavily, Firecrawl, the LLM, the full pipeline) are
 > marked `live` and skipped unless you ask for them with `-m live`.
 
 ---
@@ -245,7 +274,7 @@ Market_Analysis/
 │   ├── rag/                      # Price-history RAG (yfinance → Qdrant)
 │   ├── services/                 # PDF rendering, day-over-day comparison, run history
 │   ├── storage/                  # PostgreSQL persistence layer
-│   ├── tools/                    # Data retrieval tools (Tavily, Reddit, NSE...)
+│   ├── tools/                    # Data retrieval tools (Tavily, Firecrawl, Reddit, NSE...)
 │   └── llm/                      # LLM gateway + usage tracking
 ├── tests/                        # Unit tests
 ├── .env                          # Local credentials (never commit)

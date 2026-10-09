@@ -17,8 +17,9 @@ from src.tools.macro.inflation import get_inflation_data
 from src.tools.macro.rbi import get_rbi_updates
 from src.tools.macro.us_market import get_us_market_summary
 from src.tools.macro.usd_inr import get_usd_inr_rate
+from src.tools.firecrawl.macro_news import search_macro_news_firecrawl
 from src.tools.tavily.macro_news import search_macro_news_tavily
-from src.tools.common.normalization import utc_now_iso
+from src.tools.common.normalization import deduplicate_article_dicts, utc_now_iso
 
 TOOLS = [
     get_fii_dii_flows,
@@ -30,6 +31,7 @@ TOOLS = [
     get_gold_price,
     get_rbi_updates,
     search_macro_news_tavily,
+    search_macro_news_firecrawl,
 ]
 
 
@@ -121,7 +123,9 @@ class MacroAgent:
         )
 
         tool_data_str = json.dumps(raw_market_data, indent=2)
-        news_str = self._format_news(news_articles)
+        # Tavily and Firecrawl search the same news, so the same article can
+        # arrive from both.
+        news_str = self._format_news(deduplicate_article_dicts(news_articles))
 
         instruction = SystemMessage(
             content=f"""You are a financial market intelligence expert.
